@@ -33,7 +33,7 @@ export function normalizeFinding(f) {
 }
 
 const clone = x => JSON.parse(JSON.stringify(x));
-const strip = x => { if (!x || typeof x !== 'object') return x; const { hits, fixId, ...y } = x; return y; };
+const strip = x => { if (!x || typeof x !== 'object') return x; const { hits, fixId, _was, ...y } = x; return y; };
 export function changeKey(change) {
   return JSON.stringify({ f: (change.fixes || []).map(strip), l: (change.locks || []).map(strip), p: (change.pins || []).map(x => ({ ...strip(x), world: x.world ? x.world.map(v => +(+v).toFixed(3)) : undefined })), e: change.edits || [], dl: change.dropLocks || [], df: change.dropFixes || [] });
 }
@@ -46,7 +46,9 @@ export function applyChange(state, change, tag = null) {
   const same = (x, y) => x.side === y.side && x.a === y.a && x.b === y.b;
   if (change.dropLocks?.length) st.locks = st.locks.filter(l => !change.dropLocks.some(d => same(l, d)));
   if (change.dropFixes?.length) st.fixes = st.fixes.filter(x => !change.dropFixes.some(d => x.type === d.type && (d.a === undefined || (x.a === d.a && x.b === d.b)) && (d.side === undefined || x.side === d.side)));
-  for (const e of change.edits || []) if (st.fixes[e.index]) Object.assign(st.fixes[e.index], e.patch, id ? { fixId: st.fixes[e.index].fixId ?? id } : {});
+  // An edited item becomes this change's own (fixId = the new id) and keeps the item it replaced in _was, so muting the
+  // change puts the original back instead of deleting it.
+  for (const e of change.edits || []) if (st.fixes[e.index]) { const was = clone(st.fixes[e.index]); Object.assign(st.fixes[e.index], e.patch, id ? { fixId: id, _was: was } : {}); }
   for (const x of change.fixes || []) st.fixes.push({ ...clone(x), ...(id ? { fixId: id } : {}) });
   for (const x of change.locks || []) st.locks.push({ ...clone(x), ...(id ? { fixId: id } : {}) });
   for (const x of change.pins || []) st.pins.push({ ...clone(x), ...(id ? { fixId: id } : {}) });
@@ -292,7 +294,7 @@ H.bounce = (f, c) => travelCands(f, c, 'bounce');
 H.min_stance_width = H.max_stance_width = (f, c) => travelCands(f, c, 'width');
 H.flight_airtime = H.ballistic_flight = (f, ctx) => H.ground_float({ ...f, phase: 'flight' }, ctx);
 
-export const NO_AUTO_FIX = Object.freeze({ bone_stretch: 'a bone changes length: fix the rig or retarget, not the motion', nonfinite: 'the pose has NaN values: reload the take', prop_penetration: 'a hand goes through a prop collider', balance: 'reported only' });
+export const NO_AUTO_FIX = Object.freeze({ bone_stretch: 'a bone changes length: fix the rig or retarget, not the motion', nonfinite: 'the pose has broken values: reload the take', prop_penetration: 'a hand goes through a prop: move the prop or the hand by hand', balance: 'FIX only reports this; it does not change it' });
 export const PRIORITY_RULES = Object.keys(H);
 
 export function planCandidates({ findings = [], facts, state, stage, motion = null, rig = facts?.rig ?? {}, n = facts?.n, fps = facts?.fps ?? 30, includeInfo = false }) {

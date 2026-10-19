@@ -7,7 +7,7 @@ import { detectFlights, fitBallistic, ballisticOffsets, flightReport } from './b
 import { fulcrumOffsets, combineOffsets, detectFulcrums, pivotSlip } from './fulcrum.js';
 import { twoBoneIK as solveTwoBone, stablePole } from './ik.js';
 import { quatContinuity, readTrack, writeTrack } from './filters.js';
-import { kneeFloor } from './contacts.js';
+import { kneeFloor, kneeWobbleFix, ankleLock, recoveryBlend } from './contacts.js';
 import { floorTargets, soleMarkerRig, soleMarkers } from './wire/floor.js';
 import { rollCurveFromPlant, rollPose } from './wire/roll.js';
 import { detectFootPlants } from './wire/plants.js';
@@ -18,14 +18,17 @@ import { hikRetargetSetup, hikRetargetFrame, dstWorldRotations } from './wire/hi
 import { planFootsteps, balanceShift } from './wire/footsteps.js';
 import { compileLayers, evalRotation, evalTranslation, solveLayerKey, setLayerKey, normalizeLayer } from './wire/animlayers.js';
 import { buildRigMap, CORE as RIG_CORE } from './wire/rigmap.js';
-import { autoFixLoop, fulcrumFindings } from './wire/autofix.js';
+import { autoFixLoop, judgeToLegacy } from './wire/autofix.js';
+import { computeFacts, rigIndices, estimateGround, legsOf } from './wire/facts.js';
+import { judgeMotion } from './wire/judge.js';
+import { chainRootOffsets, applyChange, NO_AUTO_FIX } from './wire/fixplan.js';
+import { runFix, flaggedRanges, ENGINE_DEFAULTS } from './wire/fixengine.js';
 import { createGraphEditor, layerToCurves, curvesToLayer } from './ui/grapheditor.js';
-import { applyStoryBlends, storyWindow, cutIndex, insertIndex } from './wire/story.js';
+import { applyStoryBlends, cutIndex, insertIndex } from './wire/story.js';
 import { contactGizmoScale, gizmoFootMarkers } from './re/hik/contact.js';
 import { applyAdvancedMotion, assistedPose, validatePose } from './advanced.js';
 import { suggestPoses } from './poseassist.js';
 import { parsePoseModel, predictNextPose } from './wire/posemodel.js';
-import { inspectMotion } from './motionquality.js';
 import { buildControlRig, sampleControlRig, controlMotionToLocalQuaternions } from './wire/cascadeur_rig.js';
 import { retimeMapFrame, retimeTracks } from './wire/timeline.js';
 import { buildAnimatorControls, ikGoalFromOffset, modelGroundY } from './wire/animator_rig.js';
@@ -58,8 +61,9 @@ function setWorkspace(name) {
     if (active) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   }
+  // The manual tools inside Advanced stay listed in every workspace, so they are always one click away.
   for (const section of document.querySelectorAll('#panel section[data-workspaces]'))
-    section.hidden = !section.dataset.workspaces.split(' ').includes(name);
+    section.hidden = !section.closest('details.advanced') && !section.dataset.workspaces.split(' ').includes(name);
   $('workspaceTitle').textContent = WORKSPACE_NAMES[name];
   $('panel').scrollTop = 0;
 }
@@ -68,6 +72,7 @@ document.querySelectorAll('[data-workspace]').forEach(button =>
 const ACTION_WORKSPACE = {loadFRT:'scene',rigKeyFk:'rig',assistPose:'animate',lockL:'rig',lockR:'rig',pinHand:'rig'};
 document.querySelectorAll('.tool-shelf [data-action]').forEach(button =>
   button.addEventListener('click', () => {
+    if (S.fixing) return;
     if (ACTION_WORKSPACE[button.dataset.action]) setWorkspace(ACTION_WORKSPACE[button.dataset.action]);
     document.getElementById(button.dataset.action)?.click();
   }));
@@ -78,6 +83,7 @@ const S = {
   layer: new Map(), animLayers: [], activeLayer: -1, locks: [], pins: [], fixes: [], props: [], bookmarks: [], retimes: [], srcTake: null, srcIdx: null,
   frame: 0, playing: false, sel: null, selBone: -1, animatorControls: [], controlId: null,
   flags: [], gate: null, com: null, comRaw: null, contact: null, upm: 100, ground: 0,
+  rig: {}, facts: null, judgement: null, factsGround: null, engine: false, fixing: false, fixRun: null, fixLayers: [], parked: { fixes: [], locks: [], pins: [] },
 };
 const EDITS = { rows:[], cursor:-1, restoring:false, preview:null, identity:null };
 let initialRecovery=null;try{initialRecovery=JSON.parse(localStorage.getItem('fulcrum.recovery.v2')||'null');}catch{}
@@ -108,7 +114,7 @@ gizmo.addEventListener('dragging-changed', e => {
   orbit.enabled = !e.value;
   if (!e.value) commitGizmo();
 });
-gizmo.addEventListener('mouseDown', () => { if(S.take&&!EDITS.preview)EDITS.gizmoBefore=editSnapshot(); });
+gizmo.addEventListener('mouseDown', () => { if(S.take&&!EDITS.preview&&!S.fixing)EDITS.gizmoBefore=editSnapshot(); });
 
 const overlay = new THREE.Group();
 scene.add(overlay);
@@ -255,6 +261,7 @@ function setBody(obj, name, bytes, source = { location: 'samples', name }, autor
   const helper = mesh ? null : new THREE.SkeletonHelper(obj);
   if (helper) obj.add(helper);
   S.body = { obj, bones, byKey, mesh, restQ, restP, restW, name, bytes, source, rig: rigBones, autorig, parentIdx: bones.map(b => bones.indexOf(b.parent)) };
+  S.rig = rigIndices(k => S.body.byKey.get(k));
   S.animatorControls = buildAnimatorControls(bones, byKey, S.body.parentIdx); S.controlId = null; S.selBone = -1; gizmo.detach(); renderAnimatorControls();
   scene.add(obj);
   const pts = restW.map(m => new THREE.Vector3().setFromMatrixPosition(m));
@@ -281,7 +288,7 @@ function setBody(obj, name, bytes, source = { location: 'samples', name }, autor
   camera.position.set(pts[0].x + S.upm * 3.2, S.ground + S.upm * 1.6, pts[0].z + S.upm * 3.8);
   camera.updateProjectionMatrix();
   themeColors();
-  S.take = null; S.sourceShots = []; S.base = null; S.out = null; S.flags = []; S.gate = null; S.motionQuality = null; S.autoFixReport = null; S.com = null; S.contact = null; S.frame = 0; S.sel = null; S.playing = false;
+  S.take = null; S.sourceShots = []; S.base = null; S.out = null; S.flags = []; S.gate = null; S.motionQuality = null; S.autoFixReport = null; S.judgement = null; S.facts = null; S.factsGround = null; S.engine = false; S.fixRun = null; S.fixLayers = []; S.parked = { fixes: [], locks: [], pins: [] }; S.com = null; S.contact = null; S.frame = 0; S.sel = null; S.playing = false;
   S.cuts = []; S.layer.clear(); S.animLayers = []; S.activeLayer = -1; S.srcTake = null; S.srcIdx = null; S.locks = []; S.pins = []; S.fixes = [];S.props=[];S.bookmarks=[];S.retimes=[];S.poseSuggestions=null;EDITS.rows=[];EDITS.cursor=-1;EDITS.preview=null;updateProps();
   if (comPath) { overlay.remove(comPath); comPath = null; }
   comMarker.visible = false; comDrop.visible = false;
@@ -458,7 +465,7 @@ function appendTake(t, name) {
   S.take.shots.push({ name, start: S.take.n, n: t.n, matched: t.matched, total: t.total, source: shot?.source, clipIndex: shot?.clipIndex ?? 0, clipName: shot?.clipName, ...(retarget ? { retarget, slots: shot?.slots || t.slots } : {}) });
   S.sourceShots.push({ name, source: shot?.source || { location: 'samples', name }, clipIndex: shot?.clipIndex ?? 0, clipName: shot?.clipName, mode: retarget || 'names' });
   S.take.q = q; S.take.p = p; S.take.n += t.n;
-  S.srcTake = null; S.srcIdx = null;
+  S.srcTake = null; S.srcIdx = null; S.factsGround = null;
 }
 
 function resampleTake(t, fps) {
@@ -546,6 +553,7 @@ function buildBase() {
   }
   S.cleanReport = S.cleanCache.report;
   const q = new Float32Array(S.cleanCache.q), p = new Float32Array(S.cleanCache.p);
+  S.kneeReport = applyKneeFixes(q, p, nb, n);
   const advanced = applyAdvancedMotion({ q, p, nb, n, fps:S.take.fps, roots:S.body.parentIdx.map((p,i)=>p<0?i:-1).filter(i=>i>=0), names: S.body.bones.map(b => b.name), fixes: S.guidedReferenceBuild?[]:S.fixes });
   S.advancedReport = advanced.report;
   const stories = S.fixes.filter(x => x.type === 'story');
@@ -579,6 +587,84 @@ function buildBase() {
     }
   }
   return { q, p };
+}
+
+// Knee fixes {type:'knee', side, a, b, mode:'spike'|'wobble'|'extension', strength?, maxDeg?}: the flex angle about the
+// knee's own hinge (thigh space, measured from the take) is re-timed with contacts.js and written back as a calf rotation.
+const vsub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], vdot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const vcross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const vnorm = a => { const l = Math.hypot(a[0], a[1], a[2]); return l > 1e-12 ? [a[0] / l, a[1] / l, a[2] / l] : null; };
+function kneeHinge(q, p, nb, n, ci, fi) {
+  const kq = new THREE.Quaternion(), kv = new THREE.Vector3();
+  const legAt = (cq, kneeP, footP) => { kv.fromArray(footP).applyQuaternion(kq.fromArray(cq)); return { d: vnorm(kneeP), v: vnorm(kv.toArray()) }; };
+  const at = f => legAt(q.subarray((f * nb + ci) * 4, (f * nb + ci) * 4 + 4), Array.from(p.subarray((f * nb + ci) * 3, (f * nb + ci) * 3 + 3)), Array.from(p.subarray((f * nb + fi) * 3, (f * nb + fi) * 3 + 3)));
+  const flex = L => L.d && L.v ? Math.acos(Math.max(-1, Math.min(1, vdot(L.d, L.v)))) : 0;
+  const sum = [0, 0, 0], bent = 10 * Math.PI / 180;
+  let best = null, bestFlex = 0;
+  for (let f = 0; f < n; f++) {
+    const L = at(f), t = flex(L);
+    if (t > bent) { const c = vcross(L.d, L.v); sum[0] += c[0]; sum[1] += c[1]; sum[2] += c[2]; }
+    if (t > bestFlex) { bestFlex = t; best = L; }
+  }
+  const restQ = S.body.restQ[ci].toArray(), rest = legAt(restQ, S.body.restP[ci].toArray(), S.body.restP[fi].toArray());
+  const cross = vnorm(sum) ?? (flex(rest) > bent ? vnorm(vcross(rest.d, rest.v)) : bestFlex > Math.PI / 180 ? vnorm(vcross(best.d, best.v)) : null);
+  if (!cross) return null;
+  // The hinge is the main axis of the calf's own rotation from rest (log of q * inv(q_rest), thigh space) over bent frames.
+  // cross(K-H, A-K) is only the fallback: it is always perpendicular to the thigh and leans when the ankle sits off the calf line.
+  const M = [0, 0, 0, 0, 0, 0, 0, 0, 0], qr = new THREE.Quaternion().fromArray(restQ).invert(), qf = new THREE.Quaternion();
+  let used = 0;
+  for (let f = 0; f < n; f++) {
+    if (!(flex(at(f)) > bent)) continue;
+    qf.fromArray(q, (f * nb + ci) * 4).multiply(qr).normalize();
+    if (qf.w < 0) qf.set(-qf.x, -qf.y, -qf.z, -qf.w);
+    const s = Math.hypot(qf.x, qf.y, qf.z), t = 2 * Math.atan2(s, qf.w);
+    if (!(s > 1e-9) || t < bent) continue;
+    const r = [qf.x / s * t, qf.y / s * t, qf.z / s * t];
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) M[i * 3 + j] += r[i] * r[j];
+    used++;
+  }
+  let axis = cross;
+  if (used >= 3) {
+    let v = cross;
+    for (let it = 0; it < 30; it++) v = vnorm([0, 1, 2].map(i => M[i * 3] * v[0] + M[i * 3 + 1] * v[1] + M[i * 3 + 2] * v[2])) ?? v;
+    if (vdot(v, cross) < 0) v = v.map(x => -x);
+    if (vdot(v, cross) > Math.cos(45 * Math.PI / 180)) axis = v;
+  }
+  const proj = u => vsub(u, axis.map(x => x * vdot(u, axis)));
+  const ang = L => { const a = proj(L.d), b = proj(L.v); return Math.atan2(vdot(vcross(a, b), axis), vdot(a, b)); };
+  const angle = new Float64Array(n);
+  for (let f = 0; f < n; f++) { const L = at(f); if (L.d && L.v) angle[f] = ang(L); }
+  // Straight-leg reference: a near-straight rest pose reads a little off zero when the ankle sits off the calf line.
+  const restAngle = rest.d && rest.v ? ang(rest) : 0;
+  return { axis, angle, straight: Math.abs(restAngle) < 5 * Math.PI / 180 ? restAngle : 0 };
+}
+function applyKneeFixes(q, p, nb, n) {
+  const report = [], hinges = {}, R = new THREE.Quaternion(), cq = new THREE.Quaternion(), ax = new THREE.Vector3();
+  S.fixes.forEach((fx, i) => {
+    if (fx.type !== 'knee') return;
+    const s = fx.side, ti = idx('thigh_' + s), ci = idx('calf_' + s), fi = idx('foot_' + s);
+    if ([ti, ci, fi].some(v => v === undefined) || S.body.parentIdx[ci] !== ti || S.body.parentIdx[fi] !== ci) return report.push({ fix: i, frames: 0, maxDeg: 0, why: 'this rig has no plain thigh-calf-foot chain' });
+    const H = hinges[s] ??= kneeHinge(q, p, nb, n, ci, fi);
+    if (!H) return report.push({ fix: i, frames: 0, maxDeg: 0, why: 'the knee never bends, so its hinge is unknown' });
+    const a = Math.max(0, Math.min(n - 1, fx.a ?? 0)), b = Math.max(a, Math.min(n - 1, fx.b ?? n - 1)), th = H.angle;
+    // Extension: only frames in [a, b] bent backwards past maxDeg (measured from the straight rest angle) are clamped; the
+    // clamp of a continuous curve is continuous, so the bent neighbours are left alone.
+    const lim = H.straight - (fx.maxDeg ?? 0) * Math.PI / 180;
+    const nt = fx.mode === 'extension'
+      ? Float64Array.from(th, (v, f) => f >= a && f <= b && v < lim ? lim : v)
+      : kneeWobbleFix(th, [{ s: a, e: b }], { strength: fx.strength ?? 1 });
+    let frames = 0, maxDeg = 0;
+    ax.fromArray(H.axis);
+    for (let f = 0; f < n; f++) {
+      const d = nt[f] - th[f];
+      if (!(Math.abs(d) > 1e-9)) continue;
+      const o = (f * nb + ci) * 4;
+      R.setFromAxisAngle(ax, d).multiply(cq.fromArray(q, o)).normalize().toArray(q, o);
+      th[f] = nt[f]; frames++; maxDeg = Math.max(maxDeg, Math.abs(d) * 180 / Math.PI);
+    }
+    report.push({ fix: i, frames, maxDeg });
+  });
+  return report;
 }
 
 function storyUp() {
@@ -629,7 +715,6 @@ function poseFrame(f, base, rootOff, stage) {
 }
 
 const LEGS = { l: ['thigh_l', 'calf_l', 'foot_l'], r: ['thigh_r', 'calf_r', 'foot_r'] };
-const ARM_L = ['upperarm_l', 'lowerarm_l', 'hand_l'];
 
 const wq = new THREE.Quaternion(), pq = new THREE.Quaternion();
 function setWorldQuat(bone, q) {
@@ -672,12 +757,15 @@ function twoBoneIK(ia, ib, ic, target, targetQ, w, keepLocal, poleHint) {
   setWorldQuat(c, goal);
 }
 
-function armPole() {
+function armPole(side = 'l') {
   const w = k => { const i = idx(k); return i === undefined ? null : new THREE.Vector3().setFromMatrixPosition(S.body.bones[i].matrixWorld); };
   const neck = w('neck_01') || w('head'), pel = w('pelvis'), cl = w('clavicle_l'), cr = w('clavicle_r');
   if (!neck || !pel || !cl || !cr) return null;
-  return pel.sub(neck).normalize().addScaledVector(cl.sub(cr).normalize(), 0.6);
+  return pel.sub(neck).normalize().addScaledVector((side === 'r' ? cr.sub(cl) : cl.sub(cr)).normalize(), 0.6);
 }
+// A pin holds the left hand unless it says hand:'r'. Grip pins (off) are relative to the other hand.
+const pinSide = pn => pn.hand === 'r' ? 'r' : 'l';
+const ARM = { l: ['upperarm_l', 'lowerarm_l', 'hand_l'], r: ['upperarm_r', 'lowerarm_r', 'hand_r'] };
 
 const SEG = [
   ['pelvis', 'spine_02', 0.142], ['spine_02', 'spine_04|spine_03', 0.163], ['spine_04|spine_03', 'neck_01', 0.16], ['neck_01|head', 'head', 0.069],
@@ -702,7 +790,7 @@ function runPass(base, rootOff, stage) {
   const B = S.body, nb = B.bones.length, n = S.take.n;
   IKSTATE.clear();
   const W = new Float32Array(n * nb * 16), q = new Float32Array(n * nb * 4), p = new Float32Array(n * nb * 3);
-  const L = { l: LEGS.l.map(idx), r: LEGS.r.map(idx) }, AL = ARM_L.map(idx), hr = idx('hand_r');
+  const L = { l: LEGS.l.map(idx), r: LEGS.r.map(idx) }, AA = { l: ARM.l.map(idx), r: ARM.r.map(idx) }, HAND = { l: idx('hand_l'), r: idx('hand_r') };
   for (let f = 0; f < n; f++) {
     poseFrame(f, base, rootOff, stage);
     if (stage.ik) {
@@ -739,11 +827,12 @@ function runPass(base, rootOff, stage) {
         twoBoneIK(ids[0],ids[1],ids[2],new THREE.Vector3().fromArray(t.target),new THREE.Quaternion().fromArray(t.targetQ),ramp(f,t.a,t.b,4));
       }
       for (const pn of S.pins) {
-        if (f < pn.a || f > pn.b || AL.some(v => v === undefined) || hr === undefined) continue;
-        const m = pn.world ? new THREE.Matrix4().fromArray(pn.world) : B.bones[hr].matrixWorld.clone().multiply(new THREE.Matrix4().fromArray(pn.off));
+        const sd = pinSide(pn), arm = AA[sd], other = HAND[sd === 'r' ? 'l' : 'r'];
+        if (f < pn.a || f > pn.b || arm.some(v => v === undefined) || (!pn.world && (other === undefined || !pn.off))) continue;
+        const m = pn.world ? new THREE.Matrix4().fromArray(pn.world) : B.bones[other].matrixWorld.clone().multiply(new THREE.Matrix4().fromArray(pn.off));
         const tp = new THREE.Vector3(), tq = new THREE.Quaternion(), ts = new THREE.Vector3();
         m.decompose(tp, tq, ts);
-        twoBoneIK(AL[0], AL[1], AL[2], tp, tq, ramp(f, pn.a, pn.b, 4), B.bones[AL[2]].quaternion.clone(), armPole());
+        twoBoneIK(arm[0], arm[1], arm[2], tp, tq, ramp(f, pn.a, pn.b, 4), B.bones[arm[2]].quaternion.clone(), armPole(sd));
       }
     }
     for (let i = 0; i < nb; i++) {
@@ -792,13 +881,26 @@ function momentumOffsets(c, contact) {
   return off;
 }
 
-function contactsFromWorld(W) {
+// Shared floor: with the FIX solver on (S.engine, set by FIX and saved with the project) every planner uses the one
+// ground the judge uses (S.factsGround, from facts.js). Off, each planner keeps its own per-pass floor, as before.
+const sharedGround = () => S.engine && Number.isFinite(S.factsGround) ? S.factsGround : null;
+const gnd = W => sharedGround() ?? contactsFromWorld(W).ground;
+const groundOf = W => estimateGround({ W, nb: S.body.bones.length, n: S.take.n, fps: S.take.fps, upm: S.upm, legs: legsOf(S.rig) }).ground;
+// Sum root offset tracks, keeping the seam yaw in [3].
+const sumOffsets = (...arrs) => {
+  const L = arrs.filter(Boolean), n = Math.max(0, ...L.map(x => x.length));
+  return Array.from({ length: n }, (_, f) => { let o = null; for (const x of L) { const v = x[f]; if (v) o = o ? [o[0] + v[0], o[1] + (v[1] || 0), o[2] + v[2], (o[3] || 0) + (v[3] || 0)] : [v[0], v[1] || 0, v[2], v[3] || 0]; } return o; });
+};
+function contactsFromWorld(W, given = null) {
   const nb = S.body.bones.length, n = S.take.n, fps = S.take.fps;
   const feet = ['l', 'r'].map(s => [idx('foot_' + s), firstIdx('ball_' + s, 'foot_' + s)]);
-  const ys = [];
-  for (let f = 0; f < n; f++) for (const [a, b] of feet) if (a !== undefined) ys.push(Math.min(W[(f * nb + a) * 16 + 13], W[(f * nb + b) * 16 + 13]));
-  ys.sort((x, y) => x - y);
-  const ground = ys[Math.floor(ys.length * 0.03)] ?? S.ground;
+  let ground = given;
+  if (!Number.isFinite(ground)) {
+    const ys = [];
+    for (let f = 0; f < n; f++) for (const [a, b] of feet) if (a !== undefined) ys.push(Math.min(W[(f * nb + a) * 16 + 13], W[(f * nb + b) * 16 + 13]));
+    ys.sort((x, y) => x - y);
+    ground = ys[Math.floor(ys.length * 0.03)] ?? S.ground;
+  }
   const per = { l: new Uint8Array(n), r: new Uint8Array(n) }, any = new Uint8Array(n), speed = { l: new Float32Array(n), r: new Float32Array(n) };
   ['l', 'r'].forEach((s, k) => {
     const [a, b] = feet[k];
@@ -885,6 +987,55 @@ function groundPlan(W, ct) {
   return { targets, drop, level };
 }
 
+// Planted ankle height above the floor per side (median over slow planted frames), in scene units.
+function footLevel(W, ct) {
+  const nb = S.body.bones.length, n = S.take.n, level = {};
+  const med = a => { const s = [...a].sort((u, v) => u - v); return s.length ? s[s.length >> 1] : 0; };
+  for (const s of ['l', 'r']) {
+    const fo = idx('foot_' + s), ba = firstIdx('ball_' + s, 'foot_' + s), fy = [], by = [];
+    if (fo !== undefined) for (let f = 0; f < n; f++) if (ct.per[s][f] && ct.speed[s][f] < 0.3) { fy.push(W[(f * nb + fo) * 16 + 13] - ct.ground); by.push(W[(f * nb + ba) * 16 + 13] - ct.ground); }
+    level[s] = { foot: med(fy), ball: med(by) };
+  }
+  return level;
+}
+// ankleLock fixes {side, a, b, perimeter cm, maxSlide m/s, floorProximity cm, recovery s}: contacts.js ankleLock gives a
+// per-frame anchor (a moving one when maxSlide > 0); the foot is IK'd to it, ramped in over 2 frames at each run start
+// and eased out after release with recoveryBlend.
+function ankleLockPlan(W, ct) {
+  const out = new Map(), fixes = S.fixes.filter(x => x.type === 'ankleLock');
+  if (!fixes.length) return out;
+  const nb = S.body.bones.length, n = S.take.n, fps = S.take.fps, u = S.upm / 100, level = footLevel(W, ct);
+  const M = new THREE.Matrix4(), tp = new THREE.Vector3(), tq = new THREE.Quaternion(), ts = new THREE.Vector3();
+  const push = (f, t) => out.set(f, [...(out.get(f) || []).filter(x => x.side !== t.side), t]);
+  for (const fx of fixes) {
+    const fi = idx('foot_' + fx.side), a = Math.max(0, fx.a ?? 0), b = Math.min(n - 1, fx.b ?? n - 1), m = b - a + 1;
+    fx.hits = 0;
+    if (fi === undefined || m < 2) continue;
+    const pos = new Float64Array(m * 3), rot = new Float64Array(m * 4);
+    for (let k = 0; k < m; k++) { M.fromArray(W, ((a + k) * nb + fi) * 16).decompose(tp, tq, ts); tp.toArray(pos, k * 3); tq.toArray(rot, k * 4); }
+    const r = ankleLock(pos, { perimeter: (fx.perimeter ?? 3) * u, floorProximity: (fx.floorProximity ?? 10) * u, maxSlide: (fx.maxSlide ?? 0) * S.upm, fps, floor: ct.ground + level[fx.side].foot, rot });
+    let start = 0;
+    for (let k = 0; k < m; k++) {
+      if (!r.locked[k]) continue;
+      if (k === 0 || !r.locked[k - 1]) start = k;
+      push(a + k, { side: fx.side, target: r.anchors[k], q: Array.from(rot.subarray(k * 4, k * 4 + 4)), w: Math.min(1, (k - start + 1) / 2) });
+      fx.hits++;
+      if (k + 1 < m && r.locked[k + 1]) continue;
+      // A bigger release offset eases out over longer (peak about 0.15 m/s with recoveryBlend's damping 5), so the foot does not
+      // snap back to the take in a way that reads as a slide.
+      const off = [0, 1, 2].map(c => r.anchors[k][c] - pos[k * 3 + c]), rec = Math.max(fx.recovery ?? 0.15, Math.hypot(...off) / (0.08 * S.upm));
+      const L = Math.ceil(rec * fps) + 1, ease = recoveryBlend(L + 1, 0, fps, { recoveryTime: rec });
+      for (let j = 1; j <= L; j++) {
+        const f = a + k + j, w = ease[j];
+        if (f >= n || (f <= b && r.locked[f - a]) || w < 0.01) break;
+        const o = (f * nb + fi) * 16;
+        push(f, { side: fx.side, target: [W[o + 12] + off[0], W[o + 13] + off[1], W[o + 14] + off[2]], w });
+      }
+    }
+  }
+  return out;
+}
+
 function lockTargets(W) {
   const nb = S.body.bones.length;
   for (const lk of S.locks) {
@@ -934,13 +1085,12 @@ function rollPlan(W) {
 function pullPlan(W, ct) {
   const fx = S.fixes.find(x => x.type === 'pull');
   if (!fx || !S.pins.length) return [];
-  const nb = S.body.bones.length, n = S.take.n, hr = idx('hand_r');
-  const hand = { shoulder: idx('upperarm_l'), elbow: idx('lowerarm_l'), hand: idx('hand_l') };
-  if (hr === undefined || Object.values(hand).some(v => v === undefined)) return [];
+  const nb = S.body.bones.length, n = S.take.n;
   const legIds = s => ({ thigh: idx('thigh_' + s), calf: idx('calf_' + s), foot: idx('foot_' + s) });
   const res = [];
   for (const pn of S.pins) {
-    if (!pn.world) continue;
+    const [sh, el, hd] = ARM[pinSide(pn)].map(idx), hand = { shoulder: sh, elbow: el, hand: hd };
+    if (!pn.world || Object.values(hand).some(v => v === undefined)) continue;
     const wp = [pn.world[12], pn.world[13], pn.world[14]];
     const goal = () => wp;
     const o = pullOffsets({ W, nb, n, frames: [pn.a, pn.b], hand, handGoal: goal, legs: { l: legIds('l'), r: legIds('r') }, feetPlanted: (f, s) => !!ct.per[s][f] || S.locks.some(l => l.side === s && f >= l.a && f <= l.b), pull: fx.pull ?? 1, gravity: fx.gravity ?? 0.6, iterations: fx.iterations ?? 10 });
@@ -1034,7 +1184,7 @@ function travelOffsets(W) {
   if (bf.length) {
     const nb = S.body.bones.length, legs = { l: { foot: idx('foot_l'), ball: firstIdx('ball_l', 'foot_l') }, r: { foot: idx('foot_r'), ball: firstIdx('ball_r', 'foot_r') } };
     const R = S.body.restW, d = (i, j) => new THREE.Vector3().setFromMatrixPosition(R[i]).distanceTo(new THREE.Vector3().setFromMatrixPosition(R[j])) / S.upm * 100;
-    const plants = detectFootPlants({ W, nb, n, fps, upm: S.upm, ground: contactsFromWorld(W).ground, legs, legLength_cm: d(idx('thigh_l'), idx('calf_l')) + d(idx('calf_l'), idx('foot_l')), footLength_cm: Math.max(20, 1.6 * d(idx('foot_l'), idx('ball_l'))), minFrames: 2 });
+    const plants = detectFootPlants({ W, nb, n, fps, upm: S.upm, ground: gnd(W), legs, legLength_cm: d(idx('thigh_l'), idx('calf_l')) + d(idx('calf_l'), idx('foot_l')), footLength_cm: Math.max(20, 1.6 * d(idx('foot_l'), idx('ball_l'))), minFrames: 2 });
     for (const fx of bf) {
       const e = Math.max(1, fx.ease ?? 8), amp = fx.bounce * S.upm / 100;
       for (const pl of plants) {
@@ -1072,7 +1222,7 @@ function stridePlan(Wpre, Wpost) {
   if (!fixes.length) return targets;
   const nb = S.body.bones.length, R = S.body.restW, d = (i, j) => new THREE.Vector3().setFromMatrixPosition(R[i]).distanceTo(new THREE.Vector3().setFromMatrixPosition(R[j])) / S.upm * 100;
   const legs = { l: { foot: idx('foot_l'), ball: firstIdx('ball_l', 'foot_l') }, r: { foot: idx('foot_r'), ball: firstIdx('ball_r', 'foot_r') } };
-  const ground = contactsFromWorld(Wpre).ground;
+  const ground = gnd(Wpre);
   const rest = Float32Array.from(S.body.restW.flatMap(m => m.toArray()));
   const plants = detectFootPlants({ W: Wpre, nb, n: S.take.n, fps: S.take.fps, upm: S.upm, ground, legs, legLength_cm: d(idx('thigh_l'), idx('calf_l')) + d(idx('calf_l'), idx('foot_l')), footLength_cm: Math.max(20, 1.6 * d(idx('foot_l'), idx('ball_l'))), minFrames: 2 });
   const footQ = f => { const m = new THREE.Matrix4().fromArray(Wpost, f), pp = new THREE.Vector3(), qq = new THREE.Quaternion(), ss = new THREE.Vector3(); m.decompose(pp, qq, ss); return qq; };
@@ -1179,7 +1329,7 @@ function insertTake(at, a, b) {
   const q = new Float32Array((n + k) * nb * 4), p = new Float32Array((n + k) * nb * 3);
   q.set(S.take.q.subarray(0, at * nb * 4)); q.set(S.take.q.subarray(a * nb * 4, (b + 1) * nb * 4), at * nb * 4); q.set(S.take.q.subarray(at * nb * 4), (at + k) * nb * 4);
   p.set(S.take.p.subarray(0, at * nb * 3)); p.set(S.take.p.subarray(a * nb * 3, (b + 1) * nb * 3), at * nb * 3); p.set(S.take.p.subarray(at * nb * 3), (at + k) * nb * 3);
-  S.take.q = q; S.take.p = p; S.take.n = n + k;
+  S.take.q = q; S.take.p = p; S.take.n = n + k; S.factsGround = null;
   const mapF = f => f < at ? f : f + k;
   S.take.shots = S.take.shots.map(sh => sh.start >= at ? { ...sh, start: sh.start + k } : sh.start + sh.n > at ? { ...sh, n: sh.n + k } : sh);
   const remap = x => x.a == null ? x : { ...x, a: mapF(x.a), b: x.b >= at && x.a < at ? x.b + k : mapF(x.b) };
@@ -1197,7 +1347,7 @@ function cutTake(a, b) {
   const q = new Float32Array((n - k) * nb * 4), p = new Float32Array((n - k) * nb * 3);
   q.set(S.take.q.subarray(0, a * nb * 4)); q.set(S.take.q.subarray((b + 1) * nb * 4), a * nb * 4);
   p.set(S.take.p.subarray(0, a * nb * 3)); p.set(S.take.p.subarray((b + 1) * nb * 3), a * nb * 3);
-  S.take.q = q; S.take.p = p; S.take.n = n - k;
+  S.take.q = q; S.take.p = p; S.take.n = n - k; S.factsGround = null;
   const mapF = f => f < a ? f : f > b ? f - k : null;
   S.take.shots = S.take.shots.map(sh => { const s0 = sh.start, s1 = sh.start + sh.n - 1, ns = mapF(s0) ?? a, ne = mapF(s1) ?? a - 1; return { ...sh, start: ns, n: Math.max(0, ne - ns + 1) }; }).filter(sh => sh.n > 0);
   const remap = x => { if (x.a == null) return x; const na = mapF(x.a) ?? a, nb2 = mapF(x.b) ?? a - 1; return nb2 < na ? null : { ...x, a: na, b: nb2 }; };
@@ -1223,40 +1373,64 @@ function rebuild() {
   compileAnimLayers();
   S.base = buildBase();
   const nb = S.body.bones.length, n = S.take.n;
-  const seamFx = S.fixes.find(x => x.type === 'seams');
-  let seamOff = null;
-  S.seamPlan = null;
-  if (seamFx && S.take.shots.length > 1) {
-    const p0 = runPass(S.base, null, { layer: true, ik: false });
-    const pel = firstIdx('pelvis');
-    const plan = seamPlan({ W: p0.W, nb, shots: S.take.shots, pelvis: pel, thighL: idx('thigh_l'), thighR: idx('thigh_r'), blend: seamFx.blend ?? 6, force: !!seamFx.force });
-    S.seamPlan = plan;
-    if (plan.some(x => x.needed)) seamOff = seamRootOffsets(plan, n, { W: p0.W, nb, pelvis: pel, mode: seamFx.mode || 'carry' });
-    if (seamOff && !seamOff.some(Boolean)) seamOff = null;
-  }
-  const withYaw = arr => seamOff ? arr.map((o, f) => { const y = seamOff[f]?.[3]; return o ? (y ? [o[0], o[1], o[2], y] : o) : (y ? [0, 0, 0, y] : null); }) : arr;
-  const p1 = runPass(S.base, seamOff, { layer: true, ik: false });
-  S.comRaw = comSeries(p1.W);
-  const ct = contactsFromWorld(p1.W);
+  const seamFx = S.fixes.find(x => x.type === 'seams'), pel = firstIdx('pelvis');
   const g = 9.8 * S.upm, fps = S.take.fps;
   const flights = S.fixes.filter(x => x.type === 'ballistic').map(x => ({ a: x.a, b: x.b }));
-  S.flightFits = flights.map(fl => { const fit = fitBallistic(S.comRaw, fl.a, fl.b, fps, g); const tApex = fit.v0[1] / g; return { ...fl, fit, report: flightReport(fit, S.upm), pastApex: (fl.b - fl.a) / fps > tApex }; });
-  const bal = flights.length ? ballisticOffsets(S.comRaw, flights, fps, g, 'endpoints') : null;
-  const ful = S.fixes.filter(x => x.type === 'fulcrum').map(x => fulcrumOffsets(p1.W, S.body.bones.length, x.idx, x.a, x.b, 'auto', 3));
-  const extra = combineOffsets(momentumOffsets(S.comRaw, ct.any), bal, floorOffsets(p1.W, ct.ground), travelOffsets(p1.W), joinOffsets(p1.W), ...ful);
-  S.leanW = leanPlan(p1.W);
-  const off = withYaw(combineOffsets(seamOff, extra).map(o => o || null));
+  const fitFlights = com => { S.flightFits = flights.map(fl => { const fit = fitBallistic(com, fl.a, fl.b, fps, g); const tApex = fit.v0[1] / g; return { ...fl, fit, report: flightReport(fit, S.upm), pastApex: (fl.b - fl.a) / fps > tApex }; }); };
+  const seamOffsets = W => {
+    const plan = seamPlan({ W, nb, shots: S.take.shots, pelvis: pel, thighL: idx('thigh_l'), thighR: idx('thigh_r'), blend: seamFx.blend ?? 6, force: !!seamFx.force });
+    S.seamPlan = plan;
+    const o = plan.some(x => x.needed) ? seamRootOffsets(plan, n, { W, nb, pelvis: pel, mode: seamFx.mode || 'carry' }) : null;
+    return o && o.some(Boolean) ? o : null;
+  };
+  S.seamPlan = null; S.rootChain = null; S.flightFits = [];
+  let p1 = null, p2, off, addRoot;
+  if (S.engine) {
+    // FIX solver: root fixes run in fixplan.ROOT_ORDER, each on the motion the earlier ones produced (no double correction).
+    let last = null;
+    const G = W => { if (!Number.isFinite(S.factsGround)) S.factsGround = groundOf(W); return S.factsGround; };
+    const pass = acc => (last = runPass(S.base, acc.some(Boolean) ? acc.map(o => o || null) : null, { layer: true, ik: false })).W;
+    const after = fn => (W, acc) => { if (!p1) { p1 = last; G(p1.W); S.comRaw = comSeries(p1.W); S.leanW = leanPlan(p1.W); } return fn(W, acc); };
+    const producers = [
+      seamFx && S.take.shots.length > 1 && { name: 'seams', fn: seamOffsets },
+      S.fixes.some(x => x.type === 'travel') && { name: 'travel', fn: after(W => travelOffsets(W)) },
+      S.fixes.some(x => x.type === 'join') && { name: 'join', fn: after(W => joinOffsets(W)) },
+      flights.length && { name: 'ballistic', fn: after(W => { const c = comSeries(W); fitFlights(c); return ballisticOffsets(c, flights, fps, g, 'endpoints'); }) },
+      S.fixes.some(x => x.type === 'momentum') && { name: 'momentum', fn: after(W => momentumOffsets(comSeries(W), contactsFromWorld(W, G(W)).any)) },
+      ...S.fixes.filter(x => x.type === 'fulcrum').map(x => ({ name: 'fulcrum', fn: after(W => fulcrumOffsets(W, nb, x.idx, x.a, x.b, 'auto', 3)) })),
+      { name: 'kneeFloor', fn: after(W => floorOffsets(W, G(W))) },
+    ].filter(Boolean);
+    const ch = chainRootOffsets({ n, producers, pass });
+    off = ch.offsets.map(o => o || null); p2 = last; S.rootChain = ch.used;
+    addRoot = (...xs) => sumOffsets(off, ...xs);
+  } else {
+    // Manual solver (projects FIX never touched): root fixes are summed from one pass, each on its own floor, as before.
+    const seamOff = seamFx && S.take.shots.length > 1 ? seamOffsets(runPass(S.base, null, { layer: true, ik: false }).W) : null;
+    const withYaw = arr => seamOff ? arr.map((o, f) => { const y = seamOff[f]?.[3]; return o ? (y ? [o[0], o[1], o[2], y] : o) : (y ? [0, 0, 0, y] : null); }) : arr;
+    p1 = runPass(S.base, seamOff, { layer: true, ik: false });
+    if (!Number.isFinite(S.factsGround)) S.factsGround = groundOf(p1.W);
+    S.comRaw = comSeries(p1.W);
+    const ct = contactsFromWorld(p1.W);
+    fitFlights(S.comRaw);
+    const bal = flights.length ? ballisticOffsets(S.comRaw, flights, fps, g, 'endpoints') : null;
+    const ful = S.fixes.filter(x => x.type === 'fulcrum').map(x => fulcrumOffsets(p1.W, S.body.bones.length, x.idx, x.a, x.b, 'auto', 3));
+    const extra = combineOffsets(momentumOffsets(S.comRaw, ct.any), bal, floorOffsets(p1.W, ct.ground), travelOffsets(p1.W), joinOffsets(p1.W), ...ful);
+    S.leanW = leanPlan(p1.W);
+    off = withYaw(combineOffsets(seamOff, extra).map(o => o || null));
+    p2 = extra.some(Boolean) ? runPass(S.base, off, { layer: true, ik: false }) : p1;
+    addRoot = (...xs) => withYaw(combineOffsets(seamOff, extra, ...xs).map(o => o || null));
+  }
   S.rootOff = off;
-  const p2 = extra.some(Boolean) ? runPass(S.base, off, { layer: true, ik: false }) : p1;
   lockTargets(p2.W);
-  const ct2 = contactsFromWorld(p2.W);
+  const ct2 = contactsFromWorld(p2.W, sharedGround());
   const gp = groundPlan(p2.W, ct2);
   S.groundTargets = gp.targets;
   for (const [f, ts] of stridePlan(p1.W, p2.W)) { const own = ts.filter(t => t.own), have = (S.groundTargets.get(f) || []).filter(h => !own.some(t => t.side === h.side)), keep = ts.filter(t => t.own || !have.some(h => h.side === t.side)); if (keep.length || have.length) S.groundTargets.set(f, [...have, ...keep]); }
+  for (const [f, ts] of ankleLockPlan(p2.W, ct2)) S.groundTargets.set(f, [...(S.groundTargets.get(f) || []).filter(h => !ts.some(t => t.side === h.side)), ...ts]);
   S.rollTargets = rollPlan(p2.W);
   S.levelFeet = levelPlan(ct2.ground, p2.W);
   const pulls = pullPlan(p2.W, ct2);
-  const offIk = (gp.drop.some(Boolean) || pulls.length) ? withYaw(combineOffsets(seamOff, extra, gp.drop, ...pulls).map(o => o || null)) : off;
+  const offIk = (gp.drop.some(Boolean) || pulls.length) ? addRoot(gp.drop, ...pulls) : off;
   S.floorTargets = new Map();
   S.floorFrames = 0;
   const needIk = S.fixes.some(x => x.type === 'carry'||x.contactTargets?.length) || S.groundTargets.size || S.levelFeet || S.locks.length || S.pins.length || gp.targets.size || S.rollTargets.size || pulls.length;
@@ -1324,112 +1498,36 @@ function rebuild() {
       S.out.W.set(guidedReference.W.subarray(f*nb*16,(f+1)*nb*16),f*nb*16);
     }
   }
-  S.com = comSeries(S.out.W);
-  S.contact = contactsFromWorld(S.out.W);
-  S.ground = S.contact.ground;
-  S.motionQuality = inspectMotion({W:S.out.W,nb,n,fps:S.take.fps,upm:S.upm,ground:S.ground,names:S.body.bones.map(b=>b.name),parents:S.body.parentIdx,com:S.com,feet:{l:idx('foot_l'),r:idx('foot_r')},locks:[...S.locks,...S.fixes.flatMap(x=>x.contactTargets||[])],pins:S.pins});
-  analyze();
-  gate();
+  judgeNow();
+  S.rebuildMs = Math.round(performance.now() - t0);
+  if (S.fixing) return;
   buildComPath();
   themeColors();
   renderLists();
   showFrame(S.frame);
-  $('hud').dataset.ms = Math.round(performance.now() - t0);
+  $('hud').dataset.ms = S.rebuildMs;
   recordEdit();
 }
 
-function analyze() {
-  const n = S.take.n, fps = S.take.fps, nb = S.body.bones.length, g = 9.81 * S.upm, mu = +$('mu').value || 0.8;
-  const c = S.com, ct = S.contact, flags = [];
-  const sm = new Float32Array(n * 3);
-  for (let f = 0; f < n; f++) for (let k = 0; k < 3; k++) {
-    let s = 0, w = 0;
-    for (let d = -2; d <= 2; d++) { const g2 = Math.min(n - 1, Math.max(0, f + d)); s += c[g2 * 3 + k]; w++; }
-    sm[f * 3 + k] = s / w;
-  }
-  const acc = f => {
-    const a = Math.max(0, f - 1), b = Math.min(n - 1, f + 1);
-    return [0, 1, 2].map(k => (sm[b * 3 + k] - 2 * sm[f * 3 + k] + sm[a * 3 + k]) * fps * fps);
-  };
-  const major = ['pelvis', 'spine_01', 'spine_02', 'spine_03', 'spine_04', 'spine_05', 'neck_01', 'head', 'clavicle_l', 'clavicle_r', 'upperarm_l', 'upperarm_r', 'lowerarm_l', 'lowerarm_r', 'hand_l', 'hand_r', 'thigh_l', 'thigh_r', 'calf_l', 'calf_r', 'foot_l', 'foot_r'].map(idx).filter(v => v !== undefined);
-  const snapLim = +$('snapLim').value || 900;
-  const per = { overload: new Uint8Array(n), slide: new Uint8Array(n), float: new Uint8Array(n), snap: new Uint8Array(n) };
-  let air = 0;
-  for (let f = 0; f < n; f++) {
-    const a = acc(f);
-    const ah = Math.hypot(a[0], a[2]);
-    if (ct.any[f] && ah > mu * g) per.overload[f] = 1;
-    for (const s of ['l', 'r']) if (ct.per[s][f] && ct.speed[s][f] > 0.3) per.slide[f] = 1;
-    air = ct.any[f] ? 0 : air + 1;
-    if (air >= 4 && a[1] > -0.35 * g) per.float[f] = 1;
-    if (f > 0) {
-      let mx = 0;
-      for (const i of major) {
-        qa.fromArray(S.out.q, (f * nb + i) * 4); qb.fromArray(S.out.q, ((f - 1) * nb + i) * 4);
-        const ang = 2 * Math.acos(Math.min(1, Math.abs(qa.dot(qb)))) * 180 / Math.PI * fps;
-        if (ang > mx) mx = ang;
-      }
-      if (mx > snapLim) per.snap[f] = 1;
-    }
-  }
-  const label = { overload: 'Momentum change too fast for foot friction', slide: 'Planted foot sliding', float: 'Airborne but not falling', snap: 'Pose snaps between frames' };
-  for (const k of Object.keys(per)) {
-    let s = -1;
-    for (let f = 0; f <= n; f++) {
-      const on = f < n && per[k][f];
-      if (on && s < 0) s = f;
-      if (!on && s >= 0) {
-        if (f - s >= (k === 'snap' ? 1 : 2)) flags.push({ kind: k, a: s, b: f - 1, text: label[k] });
-        s = -1;
-      }
-    }
-  }
-  const merged = [];
-  for (const fl of flags.sort((x, y) => x.a - y.a)) {
-    const prev = merged.findLast(m => m.kind === fl.kind);
-    if (prev && fl.a - prev.b <= 3) prev.b = fl.b; else merged.push(fl);
-  }
-  S.flags = merged;
+// One judge for the studio (wire/judge.js): physics flags, fidelity gate, motion quality, contacts, knees, seams
+// and jitter on the shared ground. Its findings drive the problem list, the timeline, FIX and the export gate.
+function editedSet() {
+  const set = new Set(S.layer.keys());
+  for (const i of S.animCompiled?.keys() || []) set.add(i);
+  return set;
 }
-
-function gate() {
-  const n = S.take.n, nb = S.body.bones.length, lim = +$('gateLim').value || 8;
-  const rows = [];
-  const driven = new Set();
-  for (const l of S.locks) for (const k of LEGS[l.side]) driven.add(idx(k));
-  if (S.pins.length) for (const k of ARM_L) driven.add(idx(k));
-  for (const g of S.fixes) if ((g.type === 'ground' || g.type === 'roll') && g.side) for (const k of LEGS[g.side]) driven.add(idx(k));
-  for (const ts of (S.floorTargets || new Map()).values()) for (const t of ts) for (const k of LEGS[t.side]) driven.add(idx(k));
-  for (const ts of (S.floorTargets || new Map()).values()) for (const t of ts) if (t.ballQ) driven.add(firstIdx('ball_' + t.side));
-  if (S.levelFeet) for (const sd of S.levelFeet.sides) { driven.add(sd.fi); driven.add(sd.bi); }
-  if (S.leanW) { const i = firstIdx('spine_01', 'spine_02'); if (i !== undefined) driven.add(i); }
-  if (S.fixes.some(x => x.type === 'carry')) for (const k of ['upperarm_l', 'lowerarm_l', 'hand_l', 'upperarm_r', 'lowerarm_r', 'hand_r']) { const i = idx(k); if (i !== undefined) driven.add(i); }
-  for (const ts of (S.groundTargets || new Map()).values()) for (const t of ts) for (const k of LEGS[t.side]) driven.add(idx(k));
-  const joinMask = new Uint8Array(n), joins = S.fixes.filter(x => x.type === 'join');
-  for (const fx of S.fixes) if (fx.type === 'smooth' && joins.some(j => j.at >= fx.a && j.at <= fx.b)) for (let f = fx.a; f <= fx.b; f++) joinMask[f] = 1;
-  for (const fx of S.fixes) if (fx.type === 'story') { const w = storyWindow(fx, n); for (let f = w.s; f <= w.e; f++) joinMask[f] = 1; }
-  for (let i = 0; i < nb; i++) {
-    const k = keyOf(S.body.bones[i].name);
-    if (/(thumb|index|middle|ring|pinky|metacarpal|twist|corrective|ik_|weapon|attach)/.test(k)) continue;
-    const a = [];
-    for (let f = 0; f < n; f++) {
-      if (joinMask[f]) continue;
-      qa.fromArray(S.out.q, (f * nb + i) * 4); qb.fromArray(S.take.q, (f * nb + i) * 4);
-      a.push(2 * Math.acos(Math.min(1, Math.abs(qa.dot(qb)))) * 180 / Math.PI);
-    }
-    const s = a.sort((x, y) => x - y), m = s.length;
-    rows.push({ bone: S.body.bones[i].name, p95: s[Math.floor(m * 0.95)] || 0, max: s[m - 1] || 0, edited: S.layer.has(i) || !!S.animCompiled?.has(i), driven: driven.has(i) });
-  }
-  rows.sort((x, y) => y.p95 - x.p95);
-  const pel = idx('pelvis');
-  let pmax = 0;
-  if (pel !== undefined) for (let f = 0; f < n; f++) {
-    const o = (f * nb + pel) * 3;
-    pmax = Math.max(pmax, Math.hypot(S.out.p[o] - S.take.p[o], S.out.p[o + 1] - S.take.p[o + 1], S.out.p[o + 2] - S.take.p[o + 2]));
-  }
-  const free = rows.filter(r => !r.edited && !r.driven);
-  const worst = free[0]?.p95 || 0;
-  S.gate = { rows, free, lim, pass: worst <= lim, worst, worstBone: free[0]?.bone, pelvisCm: pmax / S.upm * 100 };
+const judgePins = () => S.pins.map(p => pinSide(p) === 'r' && !p.driven ? { ...p, driven: S.body.bones[idx('hand_r')]?.name ?? 'hand_r', driver: S.body.bones[idx('hand_l')]?.name ?? 'hand_l' } : p);
+function judgeNow() {
+  const nb = S.body.bones.length, n = S.take.n, fps = S.take.fps;
+  if (!Number.isFinite(S.factsGround)) S.factsGround = groundOf(S.out.W);
+  S.facts = computeFacts({ W: S.out.W, nb, n, fps, upm: S.upm, rig: S.rig, restW: S.body.restW, shots: S.take.shots, trust: S.take.trust ?? null, ground: S.factsGround });
+  S.judgement = judgeMotion({ motion: S.out, source: { q: S.take.q, p: S.take.p }, nb, n, fps, upm: S.upm, rig: S.rig,
+    names: S.body.bones.map(b => b.name), parents: S.body.parentIdx, restW: S.body.restW, shots: S.take.shots,
+    trust: S.take.trust ?? null, state: { fixes: S.fixes, locks: S.locks, pins: judgePins() }, edited: editedSet(), facts: S.facts,
+    ground: S.factsGround, opts: { mu: +$('mu').value || 0.8, snapLim: +$('snapLim').value || 900, gateLim: +$('gateLim').value || 8 } });
+  S.flags = S.judgement.flags; S.gate = S.judgement.fidelity; S.motionQuality = S.judgement.quality;
+  S.contact = { ground: S.facts.ground, per: S.facts.contacts.per, any: S.facts.contacts.feetDown, speed: S.facts.contacts.speed };
+  S.com = S.facts.com; S.ground = S.facts.ground;
 }
 
 function flightText(x) {
@@ -1439,46 +1537,138 @@ function flightText(x) {
   return `${r.airtime_s.toFixed(2)} s, apex ${r.apex_m_above_takeoff.toFixed(2)} m, ${r.takeoff_speed_ms.toFixed(1)} m/s${f.pastApex ? '' : ' (ends before apex)'}`;
 }
 
+const sideWord = s => s === 'l' ? 'left' : s === 'r' ? 'right' : 'both';
+const bonesWord = x => Array.isArray(x.bones) ? ` on ${x.bones.length} bones` : '';
 function fixLabel(x, i) {
   const r = (S.cleanReport || []).find(y => y.fix === i);
   const cr = r ? ` (${r.frames} frames / ${r.bones} bones changed, max ${r.maxDeg.toFixed(1)}°${x.type === 'despike' ? `, ${r.spikes} pops removed, ${r.rejected} kept as real motion` : ''})` : '';
-  if (x.type === 'despike') return 'Remove pops' + cr;
-  if (x.type === 'story') { const r = (S.storyReport || []).find(y => y.at === x.at); return `Story blend at f${x.at} (${x.curve ?? 'ease'}, ${x.pre ?? x.blend ?? 6}+${x.post ?? x.blend ?? 6} f${r ? `, outgoing from source f${r.outgoingFrom}, match ${(Math.hypot(...r.matchOffset) / S.upm * 100).toFixed(1)} cm` : S.srcTake ? '' : ', no source frames: re-open the project'})`; }
-  if (x.type === 'travel' && x.footsteps) { const pl = (S.footstepPlans || []).find(y => y.a === x.a && y.b === x.b); return `Biped footsteps ${x.speed ?? 3} m/s${pl ? ` (${pl.footprints.length} footprints, cycle ${pl.cycle} f, contact ${pl.contactFrames} f)` : ''}`; }
-  if (x.type === 'filter') return `Jitter filter ${x.fc} Hz` + cr;
-  if (x.type === 'median') return 'Median smooth' + cr;
-  if (x.type === 'inbetween') return `Pose-guided inbetween (${Math.round((x.strength ?? 1) * 100)}%)`;
-  if (x.type === 'secondary') return `Secondary motion (${Math.round((x.strength ?? 0.35) * 100)}%, damping ${x.damping ?? 0.72})`;
-  if (x.type === 'roll') return 'Foot roll ' + (x.side === 'l' ? 'left' : 'right');
-  if (x.type === 'floor') return `Floor contact${x.whole ? ', whole take' : ''}${x.side ? ' ' + x.side : ''} (${x.hits || 0} frames lifted)`;
-  if (x.type === 'seams') return 'Match shot seams: ' + ((S.seamPlan || []).map(p => p.needed ? `${p.shot} move ${(Math.hypot(...p.offset.T) / S.upm * 100).toFixed(1)} cm, yaw ${(p.offset.yawRad * 180 / Math.PI).toFixed(1)}°` : `${p.shot} already lines up`).join('; ') || 'single shot');
-  if (x.type === 'pull') return `Pull body to hand (pull ${x.pull}, gravity ${x.gravity}, ${S.pins.length ? (x.hits || 0) + ' frames moved' : 'needs a hand pin'})`;
-  return 'Smoothing';
+  const kr = (S.kneeReport || []).find(y => y.fix === i);
+  switch (x.type) {
+    case 'despike': return 'Remove pops' + bonesWord(x) + cr;
+    case 'filter': return `Jitter filter ${x.fc} Hz` + bonesWord(x) + cr;
+    case 'median': return 'Median smooth' + bonesWord(x) + cr;
+    case 'smooth': return 'Smooth snaps';
+    case 'momentum': return 'Momentum limited to foot friction';
+    case 'ballistic': return 'Ballistic jump arc ' + flightText(x);
+    case 'fulcrum': return `Body pivots on ${x.pivot}${Number.isFinite(x.slip) ? ` (slip was ${x.slip.toFixed(1)} cm)` : ''}`;
+    case 'ground': return `Ground ${x.side ? sideWord(x.side) + ' foot' : 'the lower foot'}`;
+    case 'level': return `Level ${x.side ? sideWord(x.side) + ' foot' : 'both feet'} on the floor`;
+    case 'carry': return `Carry pose on the arms (drop ${x.drop ?? 25} cm, tilt ${x.tilt ?? 35}°)`;
+    case 'lean': return `Upper body lean ${x.deg ?? 15}°`;
+    case 'join': return `Pelvis carried across the cut at f${x.at}`;
+    case 'knee': {
+      const what = { spike: 'Knee pop removed', wobble: 'Knee wobble steadied', extension: 'Knee kept from bending backwards' }[x.mode] ?? 'Knee fix';
+      return `${what}, ${sideWord(x.side)}${kr ? kr.why ? ` (not applied: ${kr.why})` : ` (${kr.frames} frames, max ${kr.maxDeg.toFixed(1)}°)` : ''}`;
+    }
+    case 'ankleLock': return `${x.maxSlide ? 'Foot slides smoothly on a moving anchor' : 'Foot held in place'}, ${sideWord(x.side)} (within ${x.perimeter ?? 3} cm${x.maxSlide ? `, up to ${x.maxSlide} m/s` : ''}, ${x.hits || 0} frames held)`;
+    case 'story': { const r = (S.storyReport || []).find(y => y.at === x.at); return `Story blend at f${x.at} (${x.curve ?? 'ease'}, ${x.pre ?? x.blend ?? 6}+${x.post ?? x.blend ?? 6} f${r ? `, outgoing from source f${r.outgoingFrom}, match ${(Math.hypot(...r.matchOffset) / S.upm * 100).toFixed(1)} cm` : S.srcTake ? '' : ', no source frames: re-open the project'})`; }
+    case 'travel': {
+      if (x.footsteps) { const pl = (S.footstepPlans || []).find(y => y.a === x.a && y.b === x.b); return `Biped footsteps ${x.speed ?? 3} m/s${pl ? ` (${pl.footprints.length} footprints, cycle ${pl.cycle} f, contact ${pl.contactFrames} f)` : ''}`; }
+      return `Travel forward ${x.speed ?? 3} m/s${x.reach ? ', feet reach for the floor' : ''}${x.bounce ? `, ${x.bounce} cm bounce` : ''}`;
+    }
+    case 'inbetween': return `Pose-guided inbetween (${Math.round((x.strength ?? 1) * 100)}%)`;
+    case 'secondary': return `Secondary motion (${Math.round((x.strength ?? 0.35) * 100)}%, damping ${x.damping ?? 0.72})`;
+    case 'roll': return 'Foot roll ' + sideWord(x.side);
+    case 'floor': return `Floor contact${x.whole ? ', whole take' : ''}${x.side ? ', ' + sideWord(x.side) + ' foot' : ''} (${x.hits || 0} frames lifted)`;
+    case 'seams': return 'Match shot seams: ' + ((S.seamPlan || []).map(p => p.needed ? `${p.shot} move ${(Math.hypot(...p.offset.T) / S.upm * 100).toFixed(1)} cm, yaw ${(p.offset.yawRad * 180 / Math.PI).toFixed(1)}°` : `${p.shot} already lines up`).join('; ') || 'single shot');
+    case 'pull': return `Pull body to hand (pull ${x.pull}, gravity ${x.gravity}, ${S.pins.length ? (x.hits || 0) + ' frames moved' : 'needs a hand pin'})`;
+    default: return x.type ? x.type.charAt(0).toUpperCase() + x.type.slice(1) + ' fix' : 'Fix';
+  }
 }
 
 function syncToggles() {
   $('floorOn').checked = S.fixes.some(x => x.type === 'floor' && x.whole);
   $('levelOn').checked = S.fixes.some(x => x.type === 'level');
   $('seamOn').checked = S.fixes.some(x => x.type === 'seams');
+  $('engineOn').checked = !!S.engine;
   const pl = S.fixes.find(x => x.type === 'pull');
   $('pullOn').checked = !!pl;
   if (pl) { $('pullAmt').value = pl.pull; $('pullGravity').value = pl.gravity; }
 }
 
+const fr = (a, b) => a == null ? '' : a === b || b == null ? `f${a}` : `f${a}–${b}`;
+const SEV_COL = { blocker: 'var(--bad)', warning: 'var(--warn)', info: 'var(--muted)' };
+const esc = t => String(t ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const findingRow = (f, extra = '') => `<li><span class="sev" style="background:${SEV_COL[f.severity] ?? 'var(--muted)'}"></span><span class="grow" role="button" tabindex="0" data-sel="${f.a},${f.b ?? f.a}" title="${esc(f.text)}${extra ? ' · ' + esc(extra) : ''}">${esc(f.text)}${extra ? ` <span class="dim">· ${esc(extra)}</span>` : ''}</span></li>`;
 function renderLists() {
   syncToggles();
-  const fr = (a, b) => a === b ? `f${a}` : `f${a}–${b}`;
-  $('lockList').innerHTML = S.locks.map((l, i) => `<li><span class="sev" style="background:var(--lock)"></span><span class="grow" role="button" tabindex="0" data-jump="${l.a}">${l.side === 'l' ? 'Left' : 'Right'} foot ${fr(l.a, l.b)}</span><button aria-label="Remove lock ${i+1}" data-del-lock="${i}">×</button></li>`).join('');
-  $('pinList').innerHTML = S.pins.map((p, i) => `<li><span class="sev" style="background:var(--pin)"></span><span class="grow" role="button" tabindex="0" data-jump="${p.a}">${p.kind === 'weapon' ? 'Two-hand weapon grip' : 'Grip'} from f${p.ref}, held ${fr(p.a, p.b)}</span><button aria-label="Remove grip pin ${i+1}" data-del-pin="${i}">×</button></li>`).join('');
-  const sevCol = { overload: 'var(--bad)', slide: 'var(--warn)', float: 'var(--warn)', snap: 'var(--bad)' };
-  const fixes = S.fixes.map((x, i) => `<li><span class="sev" style="background:var(--accent)"></span><span class="grow" role="button" tabindex="0" data-jump="${x.a}">${x.type === 'momentum' ? 'Momentum fix' : x.type === 'ballistic' ? 'Ballistic ' + flightText(x) : x.type === 'fulcrum' ? 'Fulcrum ' + x.pivot + ' (slip was ' + x.slip.toFixed(1) + ' cm)' : x.type === 'ground' ? 'Ground ' + (x.side === 'l' ? 'left' : x.side === 'r' ? 'right' : '') + ' foot' : fixLabel(x, i)} ${x.a === undefined ? '' : fr(x.a, x.b)}</span><button aria-label="Remove fix ${i+1}" data-del-fix="${i}">×</button></li>`).join('');
+  $('lockList').innerHTML = S.locks.map((l, i) => `<li><span class="sev" style="background:var(--lock)"></span><span class="grow" role="button" tabindex="0" data-jump="${l.a}">${l.side === 'l' ? 'Left' : 'Right'} foot locked ${fr(l.a, l.b)}${l.fixId ? ' · FIX' : ''}</span><button aria-label="Remove lock ${i+1}" data-del-lock="${i}">×</button></li>`).join('');
+  $('pinList').innerHTML = S.pins.map((p, i) => `<li><span class="sev" style="background:var(--pin)"></span><span class="grow" role="button" tabindex="0" data-jump="${p.a}">${p.kind === 'weapon' ? 'Two-hand weapon grip' : `${pinSide(p) === 'r' ? 'Right' : 'Left'} hand ${p.world ? 'held in the world' : 'grip'}`} from f${p.ref}, held ${fr(p.a, p.b)}${p.fixId ? ' · FIX' : ''}</span><button aria-label="Remove hand pin ${i+1}" data-del-pin="${i}">×</button></li>`).join('');
+  const fixes = S.fixes.map((x, i) => `<li><span class="sev" style="background:var(--accent)"></span><span class="grow" role="button" tabindex="0" data-jump="${x.a ?? x.at ?? 0}">${esc(fixLabel(x, i))} ${fr(x.a, x.b)}${x.fixId ? ' · FIX' : ''}</span><button aria-label="Remove fix ${i+1}" data-del-fix="${i}">×</button></li>`).join('');
   $('floorInfo').textContent = S.floorFrames ? `Floor contact lifted a foot on ${S.floorFrames} frames.` : (S.fixes.some(x => x.type === 'floor') ? 'Floor contact on: no sole marker below the floor.' : '');
   $('plantInfo').innerHTML = (S.slidingPlants || []).map(p => `<li><span class="sev" style="background:var(--warn)"></span><span class="grow" role="button" tabindex="0" data-sel="${p.a},${p.b}">${p.side === 'l' ? 'Left' : 'Right'} ${p.touch ? 'sliding touch' : 'sliding plant'} (${p.point}), not locked</span><span>${fr(p.a, p.b)}</span></li>`).join('');
-  $('flagList').innerHTML = fixes + (S.flags.length ? S.flags.map(fl => `<li><span class="sev" style="background:${sevCol[fl.kind]}"></span><span class="grow" role="button" tabindex="0" data-sel="${fl.a},${fl.b}">${fl.text}</span><span>${fr(fl.a, fl.b)}</span></li>`).join('') : '<li>No physics problems found.</li>');
+  const open = (S.judgement?.findings || []).filter(f => f.severity !== 'info');
+  $('flagList').innerHTML = fixes + (open.length ? open.map(f => findingRow(f)).join('') : '<li>No problems found.</li>');
   const G = S.gate;
-  $('gate').innerHTML = `<div class="verdict ${G.pass ? 'pass' : 'fail'}">${G.pass ? 'PASS' : 'FAIL'} · untouched joints p95 ≤ ${G.worst.toFixed(1)}° (limit ${G.lim}°)${G.worstBone ? ' · worst ' + G.worstBone : ''} · pelvis moved ≤ ${G.pelvisCm.toFixed(1)} cm</div><p class="note">Joints you keyed (✎) or that a foot lock or hand pin drives (⚙) are meant to move and are listed but not gated.</p>
+  $('gate').innerHTML = `<div class="verdict ${G.pass ? 'pass' : 'fail'}">${G.pass ? 'PASS' : 'FAIL'} · untouched joints p95 ≤ ${G.worst.toFixed(1)}° (limit ${G.lim}°)${G.worstBone ? ' · worst ' + G.worstBone : ''} · pelvis moved ≤ ${G.pelvisCm.toFixed(1)} cm</div><p class="note">Joints you keyed (✎) or that a foot lock, hand pin or contact fix drives (⚙) are meant to move and are listed but not gated.</p>
   <table><tr><th>joint</th><th>p95 °</th><th>max °</th></tr>${G.rows.slice(0, 8).map(r => `<tr><td>${r.bone}${r.edited ? ' ✎' : ''}${r.driven ? ' ⚙' : ''}</td><td class="${r.p95 > G.lim ? 'fail' : ''}">${r.p95.toFixed(1)}</td><td>${r.max.toFixed(1)}</td></tr>`).join('')}</table>`;
+  renderFixPanel();
   drawTL();
+}
+
+// FIX panel: what the last run fixed, what it could not fix and why, what is still open now, and one toggle per kept change.
+const plural = (k, w) => `${k} ${w}${k === 1 ? '' : 's'}`;
+function layerItems(id) {
+  const has = x => x.fixId === id, P = S.parked;
+  return { on: [...S.fixes.filter(has), ...S.locks.filter(has), ...S.pins.filter(has)], off: [...P.fixes.filter(has), ...P.locks.filter(has), ...P.pins.filter(has)] };
+}
+// Plain-English display of the engine's report lines, change details and reasons (the engine keeps its own terse text for the API).
+const plainFrames = t => String(t ?? '').replace(/\bf(\d+)-(\d+)\b/g, 'frames $1-$2').replace(/\bf(\d+)\b/g, 'frame $1');
+const PLAIN_WHY = [
+  [/^the judge returned nothing/, () => 'the check could not run on the result'],
+  [/^it raised blockers (\d+) to (\d+)/, (m, x, y) => `it would have raised the blockers from ${x} to ${y}`],
+  [/^it broke a lock, pin or bone length/, () => 'it would have broken a foot lock, a hand pin or a bone length'],
+  [/^it did not help/, () => 'it did not make the motion better'],
+  [/^it changed untouched joints too much/, () => 'it would have changed parts of the body you did not ask to change'],
+  [/^it moved the pelvis (-?\d+) cm further/, (m, c) => `it would have moved the hips ${c} cm further from the original take`],
+  [/^it moved (\S+) ([\d.]+) deg, past the fidelity limit/, (m, bone, d) => `it would have turned ${bone} ${Math.round(+d)}°, more than allowed`],
+  [/^it failed: /, () => 'something went wrong while trying it'],
+];
+const plainWhy = w => { for (const [re, t] of PLAIN_WHY) { const m = re.exec(w ?? ''); if (m) return t(...m); } return w || 'no option could be tried'; };
+const PLAIN_DETAIL = [
+  [/\bdespike\b/g, 'remove spikes'], [/\bfilter (\d+) Hz\b/g, 'smooth out shake (cutoff $1 Hz)'], [/\bmedian smooth\b/g, 'smooth'],
+  [/\bmatch seams \(blend (\d+), (\w+)\)/g, 'line up the shot seams, blended over $1 frames'], [/\bballistic arc\b/g, 'jump arc'],
+  [/\bmomentum\b/g, 'keep the body\'s momentum'], [/\b(left|right) knee spike\b/g, 'remove the $1 knee pop'], [/\b(left|right) knee wobble\b/g, 'steady the $1 knee'],
+  [/\b(left|right) knee extension\b/g, 'stop the $1 knee bending backwards'], [/\(pivot (\w+)(, stiffness [\d.]+)?\)/g, '(pivoting on the $1)'],
+  [/\(perimeter (\d+) cm(, slide [\d.]+ m\/s)?\)/g, '(within $1 cm)'], [/\bunlock\b/g, 'remove the foot lock'],
+  [/\bedit fix #(\d+) \{[^}]*\}/g, (m, i) => `adjust fix ${+i + 1}`], [/\(pull ([\d.]+)\)/g, ''],
+];
+const plainDetail = d => plainFrames(PLAIN_DETAIL.reduce((t, [re, r]) => t.replace(re, r), String(d ?? ''))).replace(/\s+\)/g, ')').trim();
+const plurals = t => t.replace(/\b(\d+) (\w+?)\(s\)/g, (m, k, w) => `${k} ${w}${+k === 1 ? '' : 's'}`);
+function plainLine(t) {
+  let m;
+  if ((m = /^Stopped after (\d+) trials \(budget\)\.$/.exec(t))) return `FIX ran out of tries after ${m[1]} tries before reaching every problem. Press FIX again to continue.`;
+  if ((m = /^(.*?): tried to fix "(.*)" \((.*)\) but (.*); left as it was\.$/.exec(t))) return plainFrames(`${m[1]}: ${m[2]}. Tried to ${m[3].charAt(0).toLowerCase() + m[3].slice(1)}, but ${plainWhy(m[4])}; left as it was.`);
+  if ((m = /^Done: (.*); kept (\d+) change\(s\), reverted (\d+), (\d+) trial\(s\)\.$/.exec(t))) return `Done: ${m[1]}; ${plural(+m[2], 'change')} kept, ${m[3]} tried and undone, ${plural(+m[4], 'try')}.`.replace(/\btrys\b/, 'tries');
+  if ((m = /^(.*?) \(((?:[^()]|\([^()]*\))*)\)\.$/.exec(t)) && !/^(Start|Still open|Stopped|Rig check)/.test(t)) t = m[1] + '.';
+  if ((m = /^(Still open \(\w+\): .*) - (.*)\.$/.exec(t))) t = `${m[1]}: ${m[2]}.`;
+  return plainFrames(plurals(t));
+}
+function renderFixPanel() {
+  const J = S.judgement, R = S.fixRun, c = J?.counts || { blocker: 0, warning: 0 };
+  const counts = `${plural(c.blocker, 'blocker')}, ${plural(c.warning, 'warning')}`;
+  $('fixNow').textContent = !J ? 'Load a take, then press FIX.' : `Now: ${counts}.${c.blocker ? ' Blockers stop the FBX export.' : ''}${c.warning ? ' Warnings do not stop export.' : ''}`;
+  const isOn = id => layerItems(id).on.length > 0 || !layerItems(id).off.length;
+  const offN = R ? R.kept.filter(k => !isOn(k.id)).length : 0, outOfTries = R?.reason === 'max_trials';
+  const runText = R && `blockers ${R.start.blockers} → ${R.end.blockers}, warnings ${R.start.warnings} → ${R.end.warnings}`;
+  if (!S.fixing && R) {
+    const same = J && c.blocker === R.end.blockers && c.warning === R.end.warnings && !offN;
+    $('fixStatus').textContent = !R.start.blockers && !R.start.warnings && !R.kept.length && same ? 'FIX done: no problems found.' : outOfTries ? `FIX ran out of tries: ${runText}. Press FIX again to continue.`
+      : same ? `FIX done: ${runText}` : `Now ${counts} (FIX run: ${runText}${offN ? `, ${plural(offN, 'change')} switched off` : ''})`;
+  } else if (!S.fixing) $('fixStatus').textContent = J ? counts : '';
+  const clean0 = R && !R.start.blockers && !R.start.warnings;
+  $('fixSummary').textContent = !R ? '' : clean0 && !R.kept.length ? 'No problems found: nothing to fix.'
+    : `Last run: ${plural(R.kept.length, 'change')} kept, ${R.reverted.length} tried and undone, ${plural(R.trials, 'try').replace('trys', 'tries')}.${outOfTries ? ' FIX ran out of tries before reaching every problem. Press FIX again to continue.' : ''} It stopped before export: check the result, then export separately.`;
+  $('fixDone').innerHTML = R?.kept.length ? R.kept.map(k => { const on = isOn(k.id); return `<li><span class="sev" style="background:${on ? 'var(--ok)' : 'var(--muted)'}"></span><span class="grow" role="button" tabindex="0" data-sel="${k.finding.a ?? 0},${k.finding.b ?? k.finding.a ?? 0}" title="${esc(plainFrames(k.finding.text))} · ${esc(plainDetail(k.detail))}">${esc(plainFrames(k.label))} <span class="dim">· was: ${esc(plainFrames(k.finding.text))}${on ? '' : ' · switched off'}</span></span></li>`; }).join('')
+    : R ? `<li class="dim">${clean0 ? 'No problems found: nothing to fix.' : 'Nothing helped, so nothing was changed.'}</li>` : '';
+  $('fixFailed').innerHTML = (R?.reverted || []).map(v => `<li><span class="sev" style="background:var(--warn)"></span><span class="grow" role="button" tabindex="0" data-sel="${v.finding.a ?? 0},${v.finding.b ?? v.finding.a ?? 0}" title="${esc(v.tried.map(t => plainDetail(t.detail) + ': ' + t.why).join('; '))}">${esc(plainFrames(v.finding.text))} <span class="dim">· ${esc(v.label.toLowerCase())} was tried, but ${esc(plainWhy(v.tried[0]?.why))}</span></span></li>`).join('');
+  const tried = f => R?.reverted.find(v => v.finding.rule === f.rule && v.finding.a <= f.b && (v.finding.b ?? v.finding.a) >= f.a)?.tried[0]?.why;
+  const why = f => NO_AUTO_FIX[f.rule] ?? (tried(f) ? 'FIX tried, but ' + plainWhy(tried(f)) : outOfTries ? 'not tried yet (FIX ran out of tries)' : '');
+  const open = (J?.findings || []).filter(f => f.severity !== 'info').map(f => ({ ...f, text: plainFrames(f.text) }));
+  $('fixOpen').innerHTML = open.map(f => findingRow(f, why(f))).join('') || (J ? '<li class="dim">No open problems.</li>' : '');
+  const layers = (S.fixLayers || []).map(L => ({ ...L, ...layerItems(L.id) })).filter(L => L.on.length || L.off.length);
+  $('fixLayerList').innerHTML = layers.map(L => `<li><input type="checkbox" aria-label="Keep: ${esc(L.label)}" data-fix-layer="${esc(L.id)}" ${L.on.length ? 'checked' : ''}><span class="grow" role="button" tabindex="0" data-sel="${L.a ?? 0},${L.b ?? L.a ?? 0}" title="${esc(plainDetail(L.detail))}">${esc(plainFrames(L.label))}${L.on.length ? '' : ' <span class="dim">· off</span>'}</span><span>${plainFrames(fr(L.a, L.b).replace('–', '-'))}</span></li>`).join('') || '<li class="dim">No FIX changes yet.</li>';
+  if (!S.fixing) $('fixLog').textContent = (R?.report || []).map(plainLine).join('\n');
 }
 
 document.addEventListener('click', e => {
@@ -1490,6 +1680,115 @@ document.addEventListener('click', e => {
   if (t.dataset.delPin) { S.pins.splice(+t.dataset.delPin, 1); rebuild(); }
   if (t.dataset.delFix) { S.fixes.splice(+t.dataset.delFix, 1); rebuild(); }
 });
+
+document.addEventListener('change', e => { const id = e.target.dataset?.fixLayer; if (id) setFixLayer(id, e.target.checked); });
+// Mute or unmute one kept FIX change: its fixes, locks and pins move to S.parked (saved with mute:true) and back. An item
+// the change edited goes back to the version it replaced (_was); locks and fixes it removed (L.dropped) come back while muted.
+const itemKey = x => [x.type ?? 'lock', x.side ?? '', x.a ?? '', x.b ?? '', x.at ?? ''].join('|');
+function setFixLayer(id, on) {
+  if (!S.take || S.fixing) return;
+  const has = x => x.fixId === id, P = S.parked, L = (S.fixLayers || []).find(L => L.id === id), drop = L?.dropped || {};
+  for (const k of ['fixes', 'locks', 'pins']) {
+    if (on) {
+      const back = P[k].filter(has);
+      P[k] = P[k].filter(x => !has(x));
+      if (drop[k]?.length) S[k] = S[k].filter(x => !drop[k].some(d => itemKey(d) === itemKey(x)));
+      for (const { mute, _at, ...x } of back) {
+        const j = x._was ? S[k].findIndex(y => y.fixId === x._was.fixId && itemKey(y) === itemKey(x._was)) : -1;
+        if (j >= 0) S[k][j] = x; else S[k].splice(Math.min(_at ?? S[k].length, S[k].length), 0, x);
+      }
+    } else {
+      const out = [];
+      S[k].forEach((x, i) => {
+        if (!has(x)) return out.push(x);
+        P[k].push({ ...(k === 'locks' ? lockFields(x) : x), mute: true, _at: i });
+        if (x._was) out.push(structuredClone(x._was));
+      });
+      for (const d of drop[k] || []) if (!out.some(x => itemKey(x) === itemKey(d))) out.push(structuredClone(d));
+      S[k] = out;
+    }
+  }
+  rebuild();
+}
+const lockFields = ({ side, a, b, required, fixId }) => ({ side, a, b, required, fixId });
+const pinFields = ({ a, b, ref, off, world, kind, driver, driven, propId, required, hand, fixId }) => ({ a, b, ref, off, world, kind, driver, driven, propId, required, hand, fixId });
+const clean = o => JSON.parse(JSON.stringify(o));
+const tick = () => new Promise(r => setTimeout(r, 0));
+// While FIX runs, the panel, the other shelf tools and the timeline ignore clicks so nothing edits the state under it.
+// inert also stops keyboard activation (Enter/Space on a focused button), and the gizmo is switched off so the 3D view cannot edit.
+const BUSY_SEL = 'aside, .shelf-group:not(.fix-group), .tlwrap, .workspace-nav, .tool-rail';
+const busy = on => {
+  document.querySelector('.app').classList.toggle('busy', on);
+  for (const el of document.querySelectorAll(BUSY_SEL)) el.inert = on;
+  gizmo.enabled = !on;
+};
+
+// One-click FIX (wire/fixengine.js runFix): stage by stage it plans a fix per finding, tries it and its variants through
+// rebuild(), and keeps a change only when the judge's score drops without new blockers. Turns on the FIX solver
+// (chained root fixes, one shared floor). One undo step for the whole run. It never exports.
+async function fixAll({ maxTrials } = {}) {
+  if (!S.out) { $('fixStatus').textContent = 'Load a take first.'; return null; }
+  if (EDITS.preview) throw new Error('Accept or reject the current preview first.');
+  if (S.fixing) throw new Error('FIX is already running.');
+  const before = editSnapshot(), btn = $('fixAll'), lines = [], run = 1 + Math.max(0, ...(S.fixLayers || []).map(L => +(/^fix-(\d+)-/.exec(L.id)?.[1] ?? 0)));
+  let trials = 0;
+  const say = t => { lines.push(t); $('fixLog').textContent = lines.map(plainLine).join('\n'); }, limit = maxTrials || ENGINE_DEFAULTS.maxTrials;
+  S.fixing = true; btn.disabled = true; S.fixRun = null; S.engine = true; busy(true);
+  $('fixStatus').textContent = 'FIX: checking the take…';
+  let r;
+  const init = clean({ fixes: S.fixes.map(({ hits, ...x }) => x), locks: S.locks.map(lockFields), pins: S.pins.map(pinFields) });
+  try {
+    r = await runFix({
+      state: clean(init),
+      apply: async st => {
+        S.fixes = structuredClone(st.fixes); S.locks = structuredClone(st.locks); S.pins = structuredClone(st.pins);
+        $('fixStatus').textContent = `FIX working… try ${++trials} (at most ${limit})${lines.length > 1 ? ' · ' + plainLine(lines.at(-1)) : ''}`;
+        await tick();
+        rebuild();
+        return S.out;
+      },
+      evaluate: () => S.judgement,
+      log: say,
+      ...(maxTrials ? { maxTrials } : {}),
+    });
+  } catch (e) {
+    S.fixing = false; btn.disabled = false; busy(false);
+    restoreEdit(before);
+    $('fixStatus').textContent = 'FIX stopped: something went wrong, and the take was left as it was.';
+    throw e;
+  }
+  // Give this run's changes ids no earlier run used (the engine numbers them fix-1, fix-2, ... each run).
+  const rename = new Map(r.kept.map(k => [k.id, `fix-${run}-${k.id.slice(4)}`]));
+  const reId = x => { for (let y = x; y; y = y._was) if (rename.has(y.fixId)) y.fixId = rename.get(y.fixId); };
+  // What each kept change removed (locks, fixes), replayed from the start state, so muting it can put them back.
+  const dropped = new Map();
+  let st0 = init;
+  for (const k of r.kept) {
+    const ch = k.change || {}, same = (x, d) => x.side === d.side && x.a === d.a && x.b === d.b;
+    const locks = (ch.dropLocks || []).flatMap(d => st0.locks.filter(l => same(l, d)));
+    const fixes = (ch.dropFixes || []).flatMap(d => st0.fixes.filter(x => x.type === d.type && (d.a === undefined || (x.a === d.a && x.b === d.b)) && (d.side === undefined || x.side === d.side)));
+    if (locks.length || fixes.length) dropped.set(k.id, clean({ locks, fixes }));
+    st0 = applyChange(st0, ch, { id: k.id });
+  }
+  for (const k of ['fixes', 'locks', 'pins']) for (const x of r.state[k]) reId(x);
+  for (const d of dropped.values()) for (const x of [...d.locks, ...d.fixes]) reId(x);
+  const droppedOf = id => dropped.get(id);
+  for (const k of r.kept) { k.oldId = k.id; k.id = rename.get(k.id); }
+  S.fixes = structuredClone(r.state.fixes); S.locks = structuredClone(r.state.locks); S.pins = structuredClone(r.state.pins);
+  const span = id => { const xs = [...S.fixes, ...S.locks, ...S.pins].filter(x => x.fixId === id && Number.isFinite(x.a)); return xs.length ? [Math.min(...xs.map(x => x.a)), Math.max(...xs.map(x => x.b ?? x.a))] : null; };
+  S.fixLayers = [...(S.fixLayers || []), ...r.kept.map(k => { const sp = span(k.id); const dr = droppedOf(k.oldId); return { id: k.id, stage: k.stage, rule: k.rule, label: k.label, detail: k.detail, a: sp?.[0] ?? k.finding.a, b: sp?.[1] ?? k.finding.b, ...(dr ? { dropped: dr } : {}) }; })];
+  S.fixRun = { report: r.report, kept: r.kept.map(({ id, stage, rule, label, detail, finding, before, after }) => ({ id, stage, rule, label, detail, finding, before, after })), reverted: r.reverted, flagged: r.flagged, start: r.start, end: r.end, trials: r.trials, reason: r.reason };
+  // Nothing kept: leave the take exactly as it was, solver setting included, so the run adds no undo step.
+  if (!r.kept.length) S.engine = !!before.project.fixEngine;
+  else if (!before.project.fixEngine && init.fixes.some(x => !x.fixId && ['seams', 'travel', 'join', 'ballistic', 'momentum', 'fulcrum', 'floor'].includes(x.type))) S.fixRun.report.splice(1, 0, 'Switched to the FIX solver: fixes that move the whole body now run one after another on one shared floor, so root fixes you made by hand can shift slightly. Untick it under Advanced > Solver to go back.');
+  S.fixing = false; btn.disabled = false; busy(false);
+  EDITS.restoring = true;
+  try { rebuild(); } finally { EDITS.restoring = false; }
+  recordEdit(before);
+  return S.fixRun;
+}
+$('fixAll').onclick = () => fixAll().catch(e => { $('fixLog').textContent += '\nFIX stopped: ' + e.message; status('FIX stopped: ' + e.message); });
+$('engineOn').onchange = e => { if (!S.take) return; S.engine = e.target.checked; rebuild(); };
 
 function buildComPath() {
   if (comPath) overlay.remove(comPath);
@@ -1528,15 +1827,16 @@ function showFrame(f) {
     const m = new THREE.Mesh(new THREE.CylinderGeometry(S.upm * 0.06, S.upm * 0.06, S.upm * 0.005, 20), new THREE.MeshBasicMaterial({ color: css('--lock'), transparent: true, opacity: 0.7 }));
     m.position.set(l.target[0], S.ground + 0.5, l.target[2]); lockMarks.add(m);
   }
-  const hl = idx('hand_l');
-  for (const p of S.pins) if (S.frame >= p.a && S.frame <= p.b && hl !== undefined) {
+  for (const p of S.pins) {
+    const hi = idx('hand_' + pinSide(p));
+    if (S.frame < p.a || S.frame > p.b || hi === undefined) continue;
     const m = new THREE.Mesh(new THREE.SphereGeometry(S.upm * 0.025, 12, 8), new THREE.MeshBasicMaterial({ color: css('--pin'), depthTest: false, transparent: true }));
     m.renderOrder = 12;
-    m.position.setFromMatrixPosition(B.bones[hl].matrixWorld); pinMarks.add(m);
+    m.position.setFromMatrixPosition(B.bones[hi].matrixWorld); pinMarks.add(m);
   }
   const fps = S.take.fps;
   const shot = S.take.shots.findLast(s => S.frame >= s.start);
-  const flags = S.flags.filter(x => S.frame >= x.a && S.frame <= x.b).map(x => x.text);
+  const flags = (S.judgement?.findings || []).filter(x => x.severity !== 'info' && S.frame >= x.a && S.frame <= (x.b ?? x.a)).map(x => x.text);
   const cts = ['l', 'r'].filter(s => S.contact.per[s][S.frame]).map(s => s === 'l' ? 'L' : 'R').join('+') || 'none';
   const fl = (S.floorTargets?.get(S.frame) || []).map(t => t.side.toUpperCase()).join('+');
   $('hud').textContent = `${shot ? shot.name : ''}\ncontact ${cts}${fl ? ' · floor lift ' + fl : ''}${S.floorFrames ? '\nfloor contact ' + S.floorFrames + ' f' : ''}${flags.length ? '\n⚠ ' + flags.join('\n⚠ ') : ''}`;
@@ -1614,7 +1914,7 @@ $('rigApplyIk').onclick=()=>{
   }catch(e){$('rigInfo').textContent='IK key failed: '+e.message;}
 };
 function commitGizmo() {
-  const i = S.selBone; if (i < 0 || !S.base) return;
+  const i = S.selBone; if (i < 0 || !S.base || S.fixing) return;
   const before=EDITS.gizmoBefore;EDITS.gizmoBefore=null;
   const nb = S.body.bones.length, f = S.frame;
   qa.fromArray(S.base.q, (f * nb + i) * 4);
@@ -1771,7 +2071,7 @@ $('autoLocks').onclick = () => {
 };
 function detectPlantsNow() { return plantsOf(runPass(buildBase(), S.rootOff, { layer: true, ik: false }).W); }
 function plantsOf(W) {
-  const nb = S.body.bones.length, ct = contactsFromWorld(W);
+  const nb = S.body.bones.length, ct = { ground: gnd(W) };
   const R = S.body.restW, d = (i, j) => new THREE.Vector3().setFromMatrixPosition(R[i]).distanceTo(new THREE.Vector3().setFromMatrixPosition(R[j])) / S.upm * 100;
   const legLength_cm = d(idx('thigh_l'), idx('calf_l')) + d(idx('calf_l'), idx('foot_l'));
   const footLength_cm = idx('ball_l') !== undefined ? Math.max(20, 1.6 * d(idx('foot_l'), idx('ball_l'))) : 26;
@@ -1825,25 +2125,39 @@ $('pinWorld').onclick = () => {
   rebuild();
   status(`Left hand pinned in the world where it is at frame ${f}, over f${a}–${b}. Pull body to hand now has a fixed goal.`);
 };
+$('pinWorldR').onclick = () => {
+  if (!S.out) return;
+  const hr = idx('hand_r');
+  if (hr === undefined) return status('This skeleton has no hand_r.');
+  const nb = S.body.bones.length, f = S.frame, [a, b] = selRange();
+  S.pins.push({ a, b, ref: f, hand: 'r', world: Array.from(S.out.W.subarray((f * nb + hr) * 16, (f * nb + hr) * 16 + 16)) });
+  rebuild();
+  status(`Right hand pinned in the world where it is at frame ${f}, over f${a}–${b}.`);
+};
 $('unpinHand').onclick = () => { S.pins = []; rebuild(); };
+function restoreFixState(P) {
+  S.engine = !!P.fixEngine; S.factsGround = Number.isFinite(P.factsGround) ? P.factsGround : null;
+  S.fixLayers = structuredClone(P.fixLayers || []);
+  S.parked = { fixes: structuredClone(P.parked?.fixes || []), locks: structuredClone(P.parked?.locks || []), pins: structuredClone(P.parked?.pins || []) };
+}
 function editSnapshot(){
-  return {project:JSON.parse(JSON.stringify(projectJSON())),take:S.take?{...S.take,q:S.take.q.slice(),p:S.take.p.slice(),shots:S.take.shots.map(x=>({...x}))}:null,srcTake:S.srcTake,srcIdx:S.srcIdx?.slice(),frame:S.frame,sel:S.sel?.slice(),body:S.body?{...S.body,poseQ:S.body.bones.map(b=>b.quaternion.toArray()),poseP:S.body.bones.map(b=>b.position.toArray())}:null};
+  return {project:JSON.parse(JSON.stringify(projectJSON())),take:S.take?{...S.take,q:S.take.q.slice(),p:S.take.p.slice(),shots:S.take.shots.map(x=>({...x}))}:null,srcTake:S.srcTake,srcIdx:S.srcIdx?.slice(),fixRun:S.fixRun,frame:S.frame,sel:S.sel?.slice(),body:S.body?{...S.body,poseQ:S.body.bones.map(b=>b.quaternion.toArray()),poseP:S.body.bones.map(b=>b.position.toArray())}:null};
 }
 function restoreEdit(row){
   EDITS.restoring=true;
-  const P=row.project; S.take=row.take;S.srcTake=row.srcTake;S.srcIdx=row.srcIdx;S.frame=row.frame;S.sel=row.sel;
+  const P=row.project; S.take=row.take;S.fixRun=row.fixRun??null;S.srcTake=row.srcTake;S.srcIdx=row.srcIdx;S.frame=row.frame;S.sel=row.sel;
   S.sourceShots=structuredClone(P.sourceShots||[]);
   S.cuts=structuredClone(P.cuts||[]);S.retimes=structuredClone(P.retimes||[]);
   if(row.body&&S.body){S.body.bones.forEach((b,i)=>{b.quaternion.fromArray(row.body.poseQ[i]);b.position.fromArray(row.body.poseP[i]);});S.body.obj.updateMatrixWorld(true);}
-  S.fixes=structuredClone(P.fixes||[]);S.pins=structuredClone(P.pins||[]);S.locks=structuredClone(P.locks||[]);S.cuts=structuredClone(P.cuts||[]);S.props=structuredClone(P.props||[]);S.bookmarks=structuredClone(P.bookmarks||[]);S.animLayers=structuredClone(P.animLayers||[]);S.layer.clear();
+  S.fixes=structuredClone(P.fixes||[]);S.pins=structuredClone(P.pins||[]);S.locks=structuredClone(P.locks||[]);restoreFixState(P);S.cuts=structuredClone(P.cuts||[]);S.props=structuredClone(P.props||[]);S.bookmarks=structuredClone(P.bookmarks||[]);S.animLayers=structuredClone(P.animLayers||[]);S.layer.clear();
   for(const L of P.layer||[]){const i=S.body.bones.findIndex(b=>b.name===L.bone);if(i>=0)S.layer.set(i,structuredClone(L.keys));}
   $('falloff').value=P.falloff;$('mu').value=P.mu;
   try{rebuild();renderAnimLayers();}finally{EDITS.restoring=false;}
 }
 function recordEdit(previous=null){
-  if(EDITS.restoring||EDITS.preview||S.autoFixing||!S.take)return;
+  if(EDITS.restoring||EDITS.preview||S.autoFixing||S.fixing||!S.take)return;
   const key=JSON.stringify(projectJSON());
-  if(EDITS.rows[EDITS.cursor]?.key===key)return;
+  if(EDITS.rows[EDITS.cursor]?.key===key||(previous&&JSON.stringify(previous.project)===key))return;
   if(previous&&!EDITS.rows.length){EDITS.rows.push({...previous,key:JSON.stringify(previous.project)});EDITS.cursor=0;}
   EDITS.rows.splice(EDITS.cursor+1);EDITS.rows.push({...editSnapshot(),key});
   if(EDITS.rows.length>20)EDITS.rows.shift();EDITS.cursor=EDITS.rows.length-1;
@@ -1901,7 +2215,7 @@ function retimeRaw(a,b,scale) {
   if (!S.take) throw new Error('Load a take before retiming.');
   const nb=S.body.bones.length,oldN=S.take.n,oldSrcIdx=S.srcIdx;
   const tracks=retimeTracks({q:S.take.q,p:S.take.p,nb,n:oldN,a,b,scale}),mapF=f=>retimeMapFrame(f,a,b,scale);
-  S.take={...S.take,n:tracks.n,q:tracks.q,p:tracks.p,shots:S.take.shots.map(s=>{const start=mapF(s.start),end=mapF(s.start+s.n-1);return {...s,start,n:end-start+1};})};
+  S.factsGround=null;S.take={...S.take,n:tracks.n,q:tracks.q,p:tracks.p,shots:S.take.shots.map(s=>{const start=mapF(s.start),end=mapF(s.start+s.n-1);return {...s,start,n:end-start+1};})};
   if(oldSrcIdx){const mapped=new Int32Array(tracks.n);for(let f=0;f<tracks.n;f++){let sf=f;if(f>=a&&f<=tracks.range[1])sf=a+(f-a)*(b-a)/(tracks.range[1]-a);else if(f>tracks.range[1])sf=f-tracks.delta;const lo=Math.max(0,Math.min(oldN-1,Math.floor(sf))),hi=Math.min(oldN-1,lo+1),w=sf-lo;mapped[f]=Math.round(oldSrcIdx[lo]*(1-w)+oldSrcIdx[hi]*w);}S.srcIdx=mapped;}
   return {oldFrames:oldN,newFrames:tracks.n,scale,range:tracks.range};
 }
@@ -2014,8 +2328,8 @@ function updateProps(){
   }
 }
 $('guidedAccept').onclick=acceptPreview;$('guidedReject').onclick=rejectPreview;
-$('editUndo').onclick=()=>{if(EDITS.preview)return rejectPreview();if(EDITS.cursor>0)restoreEdit(EDITS.rows[--EDITS.cursor]);};
-$('editRedo').onclick=()=>{if(!EDITS.preview&&EDITS.cursor+1<EDITS.rows.length)restoreEdit(EDITS.rows[++EDITS.cursor]);};
+$('editUndo').onclick=()=>{if(S.fixing)return;if(EDITS.preview)return rejectPreview();if(EDITS.cursor>0)restoreEdit(EDITS.rows[--EDITS.cursor]);};
+$('editRedo').onclick=()=>{if(!S.fixing&&!EDITS.preview&&EDITS.cursor+1<EDITS.rows.length)restoreEdit(EDITS.rows[++EDITS.cursor]);};
 $('recoverEdit').onclick=async()=>{const saved=initialRecovery||JSON.parse(localStorage.getItem('fulcrum.recovery.v2')||'null');if(saved){await applyProject(saved.project);$('guidedLog').textContent='Recovered session from '+saved.savedAt;}};
 $('compareSource').onchange=e=>{S.compareSource=e.target.checked;showFrame(S.frame);};
 $('bookmarkPose').onclick=()=>{if(!S.out)return;const before=editSnapshot(),nb=S.body.bones.length;S.bookmarks.push({name:'Pose f'+S.frame,names:S.body.bones.map(b=>b.name),q:Array.from(S.out.q.subarray(S.frame*nb*4,(S.frame+1)*nb*4))});recordEdit(before);};
@@ -2065,11 +2379,11 @@ $('smoothRange').onclick = () => { if (!S.take) return; const [a, b] = selRange(
 $('clearFix').onclick = () => { S.fixes = []; rebuild(); };
 $('ballistic').onclick = () => {
   if (!S.take) return;
-  const ct = contactsFromWorld(runPass(buildBase(), null, { layer: true, ik: false }).W);
+  const W0 = runPass(buildBase(), null, { layer: true, ik: false }).W, ct = contactsFromWorld(W0, sharedGround());
   let fl = detectFlights(ct.any, 3);
   if (S.sel) fl = fl.filter(x => x.b >= S.sel[0] && x.a <= S.sel[1]);
   if (!fl.length && S.sel) fl = [{ a: S.sel[0], b: S.sel[1] }];
-  const g = 9.8 * S.upm, com = comSeries(runPass(buildBase(), null, { layer: true, ik: false }).W);
+  const g = 9.8 * S.upm, com = comSeries(W0);
   const ok = [], rejected = [];
   for (const x of fl) {
     const r = flightReport(fitBallistic(com, x.a, x.b, S.take.fps, g), S.upm);
@@ -2083,7 +2397,7 @@ $('fulcrums').onclick = () => {
   if (!S.take) return;
   const W = runPass(buildBase(), null, { layer: true, ik: false }).W, nb = S.body.bones.length;
   const cands = ['foot_l', 'foot_r', 'ball_l', 'ball_r', 'hand_l', 'hand_r'].map(name => ({ name, idx: idx(name) })).filter(c => c.idx !== undefined);
-  let runs = detectFulcrums(W, nb, S.take.n, S.take.fps, S.upm, cands, contactsFromWorld(W).ground, 0.25, 0.08, 4);
+  let runs = detectFulcrums(W, nb, S.take.n, S.take.fps, S.upm, cands, gnd(W), 0.25, 0.08, 4);
   if (S.sel) runs = runs.filter(r => r.b >= S.sel[0] && r.a <= S.sel[1]);
   const seen = new Set();
   for (const r of runs) { const k = r.a + ':' + r.b; if (seen.has(k)) continue; seen.add(k); S.fixes.push({ type: 'fulcrum', a: r.a, b: r.b, idx: r.idx, pivot: r.pivot, slip: pivotSlip(W, nb, r.idx, r.a, r.b, S.upm) }); }
@@ -2108,9 +2422,9 @@ function drawTL() {
   tx.font = '10px IBM Plex Mono, monospace';
   S.take.shots.forEach((s, i) => { tx.fillStyle = i % 2 ? ln : 'transparent'; tx.globalAlpha = 0.5; tx.fillRect(fx(s.start), 0, fx(s.start + s.n - 1) - fx(s.start), 12); tx.globalAlpha = 1; tx.fillStyle = mu; tx.fillText(s.name.replace(/\.fbx$/i, ''), fx(s.start) + 3, 10); });
   if (S.sel) { tx.fillStyle = css('--accent'); tx.globalAlpha = 0.14; tx.fillRect(fx(S.sel[0]), 0, fx(S.sel[1]) - fx(S.sel[0]) + 1, TH); tx.globalAlpha = 1; }
-  const col = { overload: css('--bad'), slide: css('--warn'), float: css('--warn'), snap: css('--bad') };
-  for (const fl of S.flags) { tx.fillStyle = col[fl.kind]; tx.fillRect(fx(fl.a), 15, Math.max(2, fx(fl.b) - fx(fl.a)), 7); }
-  for (const x of S.fixes) { tx.fillStyle = css('--accent'); tx.fillRect(fx(x.a), 24, Math.max(2, fx(x.b) - fx(x.a)), 4); }
+  const col = { blocker: css('--bad'), warning: css('--warn') };
+  for (const fl of flaggedRanges(S.judgement?.findings || [])) { tx.fillStyle = col[fl.severity]; tx.fillRect(fx(fl.a), 15, Math.max(2, fx(fl.b) - fx(fl.a)), 7); }
+  for (const x of S.fixes) { if (x.a == null) continue; tx.fillStyle = x.fixId ? css('--ok') : css('--accent'); tx.fillRect(fx(x.a), 24, Math.max(2, fx(x.b) - fx(x.a)), 4); }
   for (const l of S.locks) { tx.fillStyle = css('--lock'); tx.fillRect(fx(l.a), l.side === 'l' ? 31 : 39, Math.max(2, fx(l.b) - fx(l.a)), 6); }
   for (const p of S.pins) { tx.fillStyle = css('--pin'); tx.fillRect(fx(p.a), 47, Math.max(2, fx(p.b) - fx(p.a)), 5); }
   tx.fillStyle = mu;
@@ -2208,7 +2522,7 @@ async function loadFRTFresh() {
   status('Loading the Checkpoint soldier and the three FRT shots…');
   await loadBodyBytes(await fetchSample(FRT[0]), FRT[0]);
   for (const s of FRT.slice(1)) await appendBytes(await fetchSample(s), s);
-  status(`FRT drill on the Checkpoint soldier: ${S.take.n} frames at ${S.take.fps} fps (${(S.take.n / S.take.fps).toFixed(1)} s), ${S.flags.length} physics flag(s).`);
+  status(`FRT drill on the Checkpoint soldier: ${S.take.n} frames at ${S.take.fps} fps (${(S.take.n / S.take.fps).toFixed(1)} s), ${S.judgement?.counts.blocker ?? 0} blocker(s), ${S.judgement?.counts.warning ?? 0} warning(s). Press FIX to clean it up.`);
 }
 $('loadFRT').onclick = () => loadFRT().catch(err => status(err.message));
 
@@ -2222,7 +2536,11 @@ function projectJSON() {
     falloff: +$('falloff').value, mu: +$('mu').value,
     layer: [...S.layer].map(([i, keys]) => ({ bone: S.body.bones[i].name, keys })),
     ...(S.animLayers.length ? { animLayers: S.animLayers } : {}),
-    cuts: S.cuts || [], retimes:S.retimes||[], locks: S.locks.map(({ side, a, b,required }) => ({ side, a, b,required })), pins: S.pins.map(({ a, b, ref, off, world, kind, driver, driven,propId,required }) => ({ a, b, ref, off, world, kind, driver, driven,propId,required })), fixes: S.fixes,props:S.props,bookmarks:S.bookmarks,
+    cuts: S.cuts || [], retimes:S.retimes||[], locks: S.locks.map(lockFields), pins: S.pins.map(pinFields), fixes: S.fixes,props:S.props,bookmarks:S.bookmarks,
+    ...(Number.isFinite(S.factsGround) ? { factsGround: S.factsGround } : {}),
+    ...(S.engine ? { fixEngine: true } : {}),
+    ...(S.fixLayers?.length ? { fixLayers: S.fixLayers } : {}),
+    ...(S.parked && (S.parked.fixes.length || S.parked.locks.length || S.parked.pins.length) ? { parked: S.parked } : {}),
   };
 }
 async function saveFile(name, data, type) {
@@ -2273,21 +2591,29 @@ $('exportGlb').onclick = async () => {
   $('exportLog').textContent = 'GLB saved: ' + p;
 };
 
+// The older one-round-at-a-time Auto Fix (wire/autofix.js autoFixLoop), now judged by wire/judge.js. FIX replaces it;
+// it stays in Advanced and behind the MCP auto_fix tool. One undo step for the whole run.
 async function autoFix({ maxRounds = 4 } = {}) {
   if (!S.out) throw new Error('load a take first');
+  if (S.fixing) throw new Error('FIX is already running.');
   const log = $('autoFixLog'), lines = [];
   const say = t => { lines.push(t); log.textContent = lines.join(String.fromCharCode(10)); };
   const strip = x => { const { hits, ...y } = x; return y; };
-  const apply = async st => { S.fixes = st.fixes.map(x => ({ ...x })); S.locks = st.locks.map(x => ({ ...x })); rebuild(); };
-  const judge = async () => fulcrumFindings({ flags: S.flags, quality: S.motionQuality, slidingPlants: plantsOf(S.out.W).filter(p => p.sliding && !p.touch), contact: S.contact });
+  const apply = async st => { S.fixes = st.fixes.map(x => ({ ...x })); S.locks = st.locks.map(x => ({ ...x })); await tick(); rebuild(); };
+  const judge = async () => judgeToLegacy(S.judgement.findings);
   say('Auto Fix: checking the current take…');
   const before = editSnapshot();
-  S.autoFixing = true;
   let r;
   try {
     const plants = detectPlantsNow().filter(p => !p.sliding).map(p => ({ side: p.side, a: p.a, b: p.b }));
-    r = await autoFixLoop({ judge, apply, maxRounds, fixes: S.fixes.map(strip), locks: S.locks.map(({ side, a, b, required }) => required === false ? { side, a, b, required } : { side, a, b }), n: S.take.n, fps: S.take.fps, plants, log: say });
-  } finally { S.autoFixing = false; recordEdit(before); }
+    S.autoFixing = true; S.fixing = true; busy(true);
+    r = await autoFixLoop({ judge, apply, maxRounds, fixes: S.fixes.map(strip), locks: S.locks.map(({ side, a, b, required, fixId }) => clean({ side, a, b, required: required === false ? false : undefined, fixId })), n: S.take.n, fps: S.take.fps, plants, log: say });
+  } finally {
+    S.autoFixing = false; S.fixing = false; busy(false);
+    EDITS.restoring = true;
+    try { rebuild(); } finally { EDITS.restoring = false; }
+    recordEdit(before);
+  }
   say(`Done (${r.reason}, ${r.rounds} round(s)). Blockers ${r.start.blockers} → ${r.end.blockers}, warnings ${r.start.warnings} → ${r.end.warnings}. Kept ${r.kept.length}, reverted ${r.reverted.length}.`);
   S.autoFixReport = { start: r.start, end: r.end, rounds: r.rounds, reason: r.reason, kept: r.kept, reverted: r.reverted, notes: r.notes };
   return S.autoFixReport;
@@ -2317,7 +2643,8 @@ $('exportFbx').onclick = async () => {
   if (!S.out) return;
   const log = $('exportLog');
   if(EDITS.preview){log.textContent='Accept or reject the current preview before exporting.';return;}
-  if(S.motionQuality&&!S.motionQuality.valid&&!$('exportAnyway').checked){log.textContent=`Export stopped: ${S.motionQuality.failedConstraints||0} required contact failures or invalid transforms. Inspect pose and contacts, or choose export anyway.`;return;}
+  const blockers=(S.judgement?.findings||[]).filter(f=>f.severity==='blocker');
+  if(blockers.length&&!$('exportAnyway').checked){log.textContent=`Export stopped: ${blockers.length} blocker(s) still open. Press FIX, fix them by hand, or tick "export anyway".\n`+blockers.slice(0,12).map(f=>'· '+f.text).join('\n');return;}
   if (!LOCAL) { log.textContent = 'FBX export needs the local Fulcrum server (run server.py). It drives Blender to write the FBX.'; return; }
   const name = ($('outName').value || 'fulcrum').replace(/[^\w.-]/g, '_');
   log.textContent = 'Writing frames, Blender is building the FBX…';
@@ -2439,6 +2766,7 @@ async function applyProject(P) {
   S.layer.clear();
   for (const L of P.layer || []) { const i = S.body.bones.findIndex(b => b.name === L.bone); if (i >= 0) S.layer.set(i, L.keys); }
   S.locks = P.locks || []; S.pins = P.pins || []; S.fixes = P.fixes || []; S.animLayers = P.animLayers || []; S.activeLayer = -1;S.props=P.props||[];S.bookmarks=P.bookmarks||[];
+  restoreFixState(P); S.fixRun = null;
   propGroup.clear();
   for(const prop of S.props)if(prop.source){try{const bytes=await(await fetch('/exports/'+encodeURIComponent(prop.source))).arrayBuffer(),obj=parseFBX(bytes);obj.scale.multiplyScalar(prop.scale||1);obj.position.set(0,0,0);const group=new THREE.Group();group.add(obj);group.matrixAutoUpdate=false;group.userData.propId=prop.id;propGroup.add(group);}catch(e){status('Prop '+prop.name+' unavailable: using grip proxy.');}}
   rebuild();
@@ -2449,10 +2777,12 @@ function summaryState() {
   return {
     loaded: true, body: S.body.name, bones: S.body.bones.length, frames: S.take.n, fps: S.take.fps, upm: S.upm,
     shots: S.take.shots.map(s => ({ name: s.name, start: s.start, n: s.n })), frame: S.frame, selection: S.sel,
-    fixes: S.fixes.map((x, i) => ({ index: i, ...x })), locks: S.locks.map(({ side, a, b }) => ({ side, a, b })), pins: S.pins.map(({ a, b, ref, world, kind, driver, driven }) => ({ a, b, ref, world: !!world, kind, driver, driven })),
+    fixes: S.fixes.map(({ _was, ...x }, i) => ({ index: i, ...x, ...(_was ? { replaces: _was.type } : {}) })), locks: S.locks.map(({ side, a, b }) => ({ side, a, b })), pins: S.pins.map(({ a, b, ref, world, kind, driver, driven }) => ({ a, b, ref, world: !!world, kind, driver, driven })),
     gate: S.gate && { pass: S.gate.pass, worst: S.gate.worst, worstBone: S.gate.worstBone, pelvisCm: S.gate.pelvisCm, limit: S.gate.lim },
-    flags: (S.flags || []).map(f => ({ kind: f.kind, a: f.a, b: f.b, text: f.text })), floorFrames: S.floorFrames ?? 0, rebuildMs: +($('hud').dataset.ms || 0),
+    flags: (S.flags || []).map(f => ({ kind: f.kind, a: f.a, b: f.b, text: f.text })), floorFrames: S.floorFrames ?? 0, rebuildMs: S.rebuildMs ?? +($('hud').dataset.ms || 0),
     rigmap: S.body.rig, autoFix: S.autoFixReport || null,
+    judge: S.judgement && { counts: S.judgement.counts, cost: +S.judgement.cost.toFixed(1), score: +S.judgement.score.toFixed(1), ground_cm: +(S.factsGround / S.upm * 100).toFixed(2), findings: S.judgement.findings.slice(0, 40).map(({ rule, severity, a, b, side, phase, text }) => ({ rule, severity, a, b, side, phase, text })) },
+    fix: { solver: S.engine ? 'chained root fixes, shared floor' : 'manual (summed root fixes)', rootChain: S.rootChain || null, lastRun: S.fixRun && { start: S.fixRun.start, end: S.fixRun.end, trials: S.fixRun.trials, kept: S.fixRun.kept.map(k => ({ id: k.id, label: k.label, detail: k.detail, problem: k.finding.text })), notFixed: S.fixRun.reverted.map(v => ({ problem: v.finding.text, why: v.tried[0]?.why ?? null })) }, layers: (S.fixLayers || []).map(L => ({ id: L.id, label: L.label, a: L.a, b: L.b, on: layerItems(L.id).on.length > 0 })) },
     guided:{preview:EDITS.preview?.label||null,reports:S.advancedReport,props:S.props,history:{undo:EDITS.cursor,redo:EDITS.rows.length-EDITS.cursor-1},quality:S.motionQuality&&{valid:S.motionQuality.valid,constraintMaxCm:S.motionQuality.constraintMaxCm,failedConstraints:S.motionQuality.failedConstraints,findings:S.motionQuality.findings.slice(0,25)}},
     retarget: S.take.shots.filter(s => s.retarget).map(s => ({ name: s.name, mode: s.retarget, slots: s.slots })),
     animLayers: S.animLayers.map(L => ({ name: L.name, weight: L.weight, mute: L.mute, override: L.override, accumulation: L.accumulation, tangent: L.tangent, bones: Object.fromEntries(Object.entries(L.bones || {}).map(([b, k]) => [b, k.length])) })),
@@ -2514,6 +2844,8 @@ const API = {
   frame: async ({ f }) => { showFrame(f); return { frame: S.frame }; },
   rebuild: async () => { rebuild(); return summaryState(); },
   auto_fix: async ({ max_rounds = 4 } = {}) => ({ ...(await autoFix({ maxRounds: max_rounds })), state: summaryState() }),
+  fix: async ({ max_trials } = {}) => { const r = await fixAll({ maxTrials: max_trials }); if (!r) throw new Error('Load a take first.'); return { report: r.report, start: r.start, end: r.end, trials: r.trials, kept: r.kept.map(k => ({ id: k.id, stage: k.stage, label: k.label, detail: k.detail, problem: k.finding.text })), notFixed: r.reverted.map(v => ({ problem: v.finding.text, tried: v.tried })), flagged: r.flagged, state: summaryState() }; },
+  fix_layer: async ({ id, on = true }) => { if (!(S.fixLayers || []).some(L => L.id === id)) throw new Error('no FIX change ' + id); setFixLayer(id, !!on); return summaryState(); },
   graph_editor: async ({ open = true, bone, key_frame, layer } = {}) => {
     if (layer != null) { S.activeLayer = layer; renderAnimLayers(); }
     if (bone) { const i = S.body.byKey.get(keyOf(bone)); if (i === undefined) throw new Error('no bone ' + bone); selectBone(i); }
@@ -2547,8 +2879,9 @@ const API = {
     await $('exportFbx').onclick();
     return { log: $('exportLog').textContent };
   },
-  eval: async ({ code }) => { const fn = new Function('S', 'THREE', 'api', 'return (async () => {' + code + '})()'); return await fn(S, THREE, { rebuild, showFrame, idx, firstIdx, wpos, sampleTakeHik, appendTake, renderShots, detectFps, bakedClip, geOpen, geKeyBone, geRefresh, GE, selectBone, autoFix, loadBodyBytes, fetchSample, keyOf }); },
+  eval: async ({ code }) => { const fn = new Function('S', 'THREE', 'api', 'return (async () => {' + code + '})()'); return await fn(S, THREE, { rebuild, showFrame, idx, firstIdx, wpos, sampleTakeHik, appendTake, renderShots, detectFps, bakedClip, geOpen, geKeyBone, geRefresh, GE, selectBone, autoFix, fixAll, setFixLayer, setBody, projectJSON, loadBodyBytes, fetchSample, keyOf }); },
 };
+window.__fulcrumApi = API;
 async function bridgeLoop() {
   if (!LOCAL) return;
   const client=crypto.randomUUID();

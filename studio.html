@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Fulcrum</title>
-<link rel="stylesheet" href="style.css?v=workspace-20261016b">
+<link rel="stylesheet" href="style.css?v=fix-20261019">
 <link rel="stylesheet" href="ui/grapheditor.css">
 <script type="importmap">
 {"imports":{
@@ -31,6 +31,7 @@
     <button type="button" data-workspace="export">Export</button>
   </nav>
   <div class="tool-shelf" role="toolbar" aria-label="Animation tools">
+    <div class="shelf-group fix-group"><button type="button" id="fixAll" class="fix-btn" title="Find and fix motion problems. It never exports." aria-describedby="fixStatus">FIX</button><span id="fixStatus" class="fix-status" role="status" aria-live="polite"></span></div>
     <div class="shelf-group"><span class="shelf-label">PROJECT</span><button type="button" data-action="loadFRT" title="Load FRT drill" aria-label="Load FRT drill">↧</button><button type="button" data-action="editUndo" title="Undo" aria-label="Undo">↶</button><button type="button" data-action="editRedo" title="Redo" aria-label="Redo">↷</button></div>
     <div class="shelf-group"><span class="shelf-label">ANIMATE</span><button type="button" data-action="rigKeyFk" title="Key selected control" aria-label="Key selected control">◆</button><button type="button" data-action="assistPose" title="Suggest pose" aria-label="Suggest pose">✦</button><button type="button" data-action="geToggle" title="Toggle graph editor" aria-label="Toggle graph editor">⌁</button></div>
     <div class="shelf-group"><span class="shelf-label">CONTACTS</span><button type="button" data-action="lockL" title="Lock left foot" aria-label="Lock left foot">L</button><button type="button" data-action="lockR" title="Lock right foot" aria-label="Lock right foot">R</button><button type="button" data-action="pinHand" title="Pin left hand to grip" aria-label="Pin left hand to grip">⌖</button></div>
@@ -49,6 +50,18 @@
     <div class="view" id="view" role="region" aria-label="3D pose viewport"><div class="hud" id="hud" aria-hidden="true"></div><div class="legend"><span class="sw com"></span>center of mass <span class="sw lock"></span>foot lock <span class="sw pin"></span>hand pin</div></div>
     <aside id="panel">
       <div class="inspector-head"><span id="workspaceTitle">Animate</span><small>INSPECTOR</small></div>
+      <section data-workspaces="scene animate rig physics review export" class="fix-panel" aria-labelledby="fixHead">
+        <h2 id="fixHead">FIX report</h2>
+        <p class="note" id="fixNow">Load a take, then press FIX.</p>
+        <p class="note" id="fixSummary"></p>
+        <h3>Fixed</h3><ul class="list" id="fixDone"></ul>
+        <h3>Could not fix</h3><ul class="list" id="fixFailed"></ul>
+        <h3>Still open</h3><ul class="list" id="fixOpen"></ul>
+        <h3>FIX changes</h3>
+        <p class="note">Each change FIX kept. Untick one to switch it off without losing it; tick it to bring it back. Each switch is one undo step.</p>
+        <ul class="list" id="fixLayerList"></ul>
+        <details class="fix-log"><summary>Full report</summary><pre class="log" id="fixLog" aria-live="polite"></pre></details>
+      </section>
       <section data-workspaces="scene">
         <h2>Take</h2>
         <div class="row"><select id="sampleList" aria-label="Sample files"></select></div>
@@ -57,9 +70,6 @@
         <div class="row"><label class="file">Import + auto-rig FBX…<input type="file" id="autoRigIn" accept=".fbx"></label></div>
         <p class="note">Already-rigged FBX: recognize the skeleton and build animator controls. Unrigged FBX: fit a starter skeleton and proximity skin to an upright Y-up humanoid mesh. Inspect the fit and weights before production use.</p>
         <div class="row"><label>Retarget <select id="retargetMode" aria-label="Retarget mode"><option value="auto">auto</option><option value="names">by bone name</option><option value="hik">HumanIK (any humanoid)</option></select></label></div>
-        <div class="row"><label><input type="checkbox" id="seamOn"> Match shot seams</label></div>
-        <div class="row"><button id="cutSel">Cut selection</button><button id="insertSel">Insert selection at playhead</button><button id="retimeSel">Retiming selection</button><label>Scale <input type="number" id="retimeScale" value="1.25" min="0.1" max="10" step="0.05"></label></div>
-        <div class="row"><label><input type="checkbox" id="storyOn" checked> Story blend</label><select id="storyCurve" aria-label="Story blend curve"><option value="ease">ease</option><option value="linear">linear</option><option value="slow_in">slow in</option><option value="fast_in">fast in</option></select><label>Blend <input type="number" id="storyBlend" value="6" min="1" max="60"> f</label></div>
         <ul class="list" id="shotList"></ul>
       </section>
       <section data-workspaces="animate">
@@ -81,6 +91,45 @@
         <div class="row"><label>Pole X cm <input id="rigPoleX" type="number" value="0" step="1"></label><label>Y cm <input id="rigPoleY" type="number" value="0" step="1"></label><label>Z cm <input id="rigPoleZ" type="number" value="0" step="1"></label><label>Blend <input id="rigBlend" type="number" value="1" min="0" max="1" step="0.1"></label><button id="rigApplyIk">Apply IK key</button></div>
         <p class="note" id="rigInfo"></p>
       </section>
+      <section data-workspaces="animate">
+        <h2>Guided motion</h2>
+        <p class="note">Range-limited generation preserves locked feet and hand/weapon constraints. Suggestions remain editable fixes.</p>
+        <div class="row"><button id="inbetweenSel" class="primary">Pose-guided inbetween · recovered Cascadeur model</button><label>Strength <input id="inbetweenStrength" type="number" value="1" min="0" max="1" step="0.1"></label><label>Style ID <input id="neuralStyle" type="number" value="0" min="0" step="1"></label></div>
+        <div class="row"><label>Spacing <select id="guidedSpacing"><option value="ease">Soft</option><option value="linear">Even</option><option value="heavy">Heavy</option></select></label><label><input id="guidedRoot" type="checkbox" checked>Keep root path</label></div>
+        <div class="row"><button id="assistPose">Suggest pose from motion</button><button id="cascadeurPose">Cascadeur pose inference (explicit guidance)</button><label>Snap vector <input type="text" id="poseSnap" value="0,0,0,0,0,0" aria-label="Explicit pose model snap parameters"></label><label>Spine <input type="number" id="poseSpine" value="0" step="0.1"></label><button id="nextPose">Next suggestion</button><button id="validatePose">Check pose and contacts</button><button id="physicsCleanup">Preview physics cleanup</button></div>
+        <div class="row"><button id="secondarySel">Add secondary motion</button><label>Strength <input id="secondaryStrength" type="number" value="0.3" min="0" max="1" step="0.05"></label><label>Damping <input id="secondaryDamping" type="number" value="0.75" min="0" max="0.98" step="0.05"></label></div>
+        <div class="row"><button id="weaponGrip">Capture two-hand weapon grip</button><label class="button">Import weapon FBX<input id="propIn" type="file" accept=".fbx" hidden></label><label>Length m <input id="propLength" type="number" min="0.05" max="5" step="0.05" value="0.8"></label></div>
+        <div class="row"><button id="guidedAccept">Accept preview</button><button id="guidedReject">Reject preview</button><button id="editUndo">Undo</button><button id="editRedo">Redo</button><button id="recoverEdit">Recover session</button><label><input id="compareSource" type="checkbox">Show source</label></div>
+        <div class="row"><button id="bookmarkPose">Bookmark pose</button><select id="poseBookmarks" aria-label="Pose bookmarks"></select><button id="restorePose">Use pose</button></div>
+        <pre class="log" id="guidedLog" aria-live="polite"></pre>
+      </section>
+      <section data-workspaces="physics">
+        <h2>Checks</h2>
+        <p class="note">Every problem the checks find right now. Click one to select its frames.</p>
+        <div class="row"><label>Friction μ <input type="number" id="mu" value="0.8" step="0.05" min="0.2" max="1.5"></label><label>Snap °/s <input type="number" id="snapLim" value="900" step="50"></label></div>
+        <ul class="list" id="flagList"></ul>
+      </section>
+      <section data-workspaces="review">
+        <h2>Fidelity gate</h2>
+        <div class="row"><label>Limit <input type="number" id="gateLim" value="8" step="1"> °</label></div>
+        <div id="gate" aria-live="polite"></div>
+      </section>
+      <section data-workspaces="export">
+        <h2>Export</h2>
+        <div class="row"><input id="outName" value="FRT_fulcrum" aria-label="Export name"></div>
+        <div class="row"><button id="exportFbx" class="primary">Export FBX for Unreal</button><button id="exportGlb">Save GLB</button><button id="saveProj">Save project</button><label class="file">Open project…<input type="file" id="projIn" accept=".json"></label></div>
+        <div class="row"><label><input type="checkbox" id="exportAnyway"> export anyway</label><span class="note">Open blockers (see the FIX report) stop the FBX export unless this is ticked. FIX never exports by itself.</span></div>
+        <pre class="log" id="exportLog" aria-live="polite"></pre>
+      </section>
+      <details class="advanced" id="advanced">
+        <summary>Advanced: manual tools</summary>
+        <p class="note">The hand tools FIX uses under the hood, from every workspace. Pick frames on the timeline (shift-drag), then apply one.</p>
+      <section data-workspaces="scene">
+        <h2>Edit the take</h2>
+        <div class="row"><label><input type="checkbox" id="seamOn"> Match shot seams</label></div>
+        <div class="row"><button id="cutSel">Cut selection</button><button id="insertSel">Insert selection at playhead</button><button id="retimeSel">Retiming selection</button><label>Scale <input type="number" id="retimeScale" value="1.25" min="0.1" max="10" step="0.05"></label></div>
+        <div class="row"><label><input type="checkbox" id="storyOn" checked> Story blend</label><select id="storyCurve" aria-label="Story blend curve"><option value="ease">ease</option><option value="linear">linear</option><option value="slow_in">slow in</option><option value="fast_in">fast in</option></select><label>Blend <input type="number" id="storyBlend" value="6" min="1" max="60"> f</label></div>
+      </section>
       <section data-workspaces="rig physics">
         <h2>Contacts</h2>
         <p class="note">Shift-drag the timeline to pick frames, then lock a foot to the ground there.</p>
@@ -95,48 +144,28 @@
       <section data-workspaces="rig">
         <h2>Support hand</h2>
         <p class="note">Captures the left hand's grip relative to the right hand at the current frame and holds it over the selected frames.</p>
-        <div class="row"><button id="pinHand">Pin left hand to grip</button><button id="pinWorld">Pin left hand in world</button><button id="unpinHand">Remove</button></div>
+        <div class="row"><button id="pinHand">Pin left hand to grip</button><button id="pinWorld">Pin left hand in world</button><button id="pinWorldR">Pin right hand in world</button><button id="unpinHand">Remove</button></div>
         <div class="row"><label><input type="checkbox" id="pullOn"> Pull body to hand</label><label>Pull <input type="number" id="pullAmt" value="1" step="0.1" min="0" max="2"></label><label>Gravity <input type="number" id="pullGravity" value="0.6" step="0.05" min="0" max="1"></label></div>
         <ul class="list" id="pinList"></ul>
       </section>
-      <section data-workspaces="animate">
-        <h2>Guided motion</h2>
-        <p class="note">Range-limited generation preserves locked feet and hand/weapon constraints. Suggestions remain editable fixes.</p>
-        <div class="row"><button id="inbetweenSel" class="primary">Pose-guided inbetween · recovered Cascadeur model</button><label>Strength <input id="inbetweenStrength" type="number" value="1" min="0" max="1" step="0.1"></label><label>Style ID <input id="neuralStyle" type="number" value="0" min="0" step="1"></label></div>
-        <div class="row"><label>Spacing <select id="guidedSpacing"><option value="ease">Soft</option><option value="linear">Even</option><option value="heavy">Heavy</option></select></label><label><input id="guidedRoot" type="checkbox" checked>Keep root path</label></div>
-        <div class="row"><button id="assistPose">Suggest pose from motion</button><button id="cascadeurPose">Cascadeur pose inference (explicit guidance)</button><label>Snap vector <input type="text" id="poseSnap" value="0,0,0,0,0,0" aria-label="Explicit pose model snap parameters"></label><label>Spine <input type="number" id="poseSpine" value="0" step="0.1"></label><button id="nextPose">Next suggestion</button><button id="validatePose">Check pose and contacts</button><button id="physicsCleanup">Preview physics cleanup</button></div>
-        <div class="row"><button id="secondarySel">Add secondary motion</button><label>Strength <input id="secondaryStrength" type="number" value="0.3" min="0" max="1" step="0.05"></label><label>Damping <input id="secondaryDamping" type="number" value="0.75" min="0" max="0.98" step="0.05"></label></div>
-        <div class="row"><button id="weaponGrip">Capture two-hand weapon grip</button><label class="button">Import weapon FBX<input id="propIn" type="file" accept=".fbx" hidden></label><label>Length m <input id="propLength" type="number" min="0.05" max="5" step="0.05" value="0.8"></label></div>
-        <div class="row"><button id="guidedAccept">Accept preview</button><button id="guidedReject">Reject preview</button><button id="editUndo">Undo</button><button id="editRedo">Redo</button><button id="recoverEdit">Recover session</button><label><input id="compareSource" type="checkbox">Show source</label></div>
-        <div class="row"><button id="bookmarkPose">Bookmark pose</button><select id="poseBookmarks" aria-label="Pose bookmarks"></select><button id="restorePose">Use pose</button></div>
-        <pre class="log" id="guidedLog" aria-live="polite"></pre>
-      </section>
       <section data-workspaces="physics">
-        <h2>Physics</h2>
-        <div class="row"><label>Friction μ <input type="number" id="mu" value="0.8" step="0.05" min="0.2" max="1.5"></label><label>Snap °/s <input type="number" id="snapLim" value="900" step="50"></label></div>
-        <div class="row"><button id="fixRange" class="primary">Fix momentum in selection</button><button id="smoothRange">Smooth snaps in selection</button><button id="clearFix">Clear fixes</button></div>
+        <h2>Physics tools</h2>
+        <div class="row"><button id="fixRange">Fix momentum in selection</button><button id="smoothRange">Smooth snaps in selection</button><button id="clearFix">Clear fixes</button></div>
         <div class="row"><button id="ballistic">Snap to ballistic</button><button id="fulcrums">Add fulcrums</button></div>
-        <div class="row"><button id="despikeRange">Remove pops</button><button id="filterRange">Filter jitter</button><label>Fc <input type="number" id="cleanFc" value="7" step="1" min="1" max="30"> Hz</label><button id="medianRange">Median smooth</button></div>
-        <ul class="list" id="flagList"></ul>
+        <div class="row"><button id="despikeRange">Remove pops</button><button id="filterRange">Filter jitter</button><label title="Smoothing cutoff: lower values smooth more">Smoothing cutoff <input type="number" id="cleanFc" value="7" step="1" min="1" max="30"> Hz</label><button id="medianRange">Median smooth</button></div>
       </section>
       <section data-workspaces="review">
-        <h2>Fidelity gate</h2>
-        <div class="row"><label>Limit <input type="number" id="gateLim" value="8" step="1"> °</label></div>
-        <div id="gate" aria-live="polite"></div>
-      </section>
-      <section data-workspaces="review">
-        <h2>Auto Fix</h2>
-        <p class="note">Checks the take with Fulcrum's own checks: the physics flags (foot slide, float, pose snaps), feet below the floor, failed foot locks and hand pins, and sliding foot plants. It plans a fix per problem and keeps each one only if the problem count drops. One undo reverts the whole run.</p>
-        <div class="row"><button id="autoFix" class="primary">Auto Fix</button></div>
+        <h2>Old Auto Fix</h2>
+        <p class="note">The older Auto Fix that FIX replaced. It tries one fix per problem and keeps it only if the number of problems drops. It uses the same checks as FIX. One Undo takes back the whole run.</p>
+        <div class="row"><button id="autoFix">Auto Fix</button></div>
         <pre class="log" id="autoFixLog" aria-live="polite"></pre>
       </section>
-      <section data-workspaces="export">
-        <h2>Export</h2>
-        <div class="row"><input id="outName" value="FRT_fulcrum" aria-label="Export name"></div>
-        <div class="row"><button id="exportFbx" class="primary">Export FBX for Unreal</button><button id="exportGlb">Save GLB</button><button id="saveProj">Save project</button><label class="file">Open project…<input type="file" id="projIn" accept=".json"></label></div>
-        <div class="row"><label><input type="checkbox" id="exportAnyway"> export anyway</label><span class="note">Failed foot locks, failed hand pins or broken transforms stop the FBX export unless this is ticked.</span></div>
-        <pre class="log" id="exportLog" aria-live="polite"></pre>
+      <section data-workspaces="physics review">
+        <h2>Solver</h2>
+        <div class="row"><label><input type="checkbox" id="engineOn"> Use FIX's way of combining fixes (recommended)</label></div>
+        <p class="note">FIX turns this on when it keeps a change, and the project remembers it. With it on, fixes that move the whole body are applied one after another on one shared floor. Turn it off to match projects made before FIX.</p>
       </section>
+      </details>
     </aside>
   </main>
   <div class="gepanel" id="gePanel" role="region" aria-label="Graph editor" hidden>

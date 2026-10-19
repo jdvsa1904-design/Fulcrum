@@ -27,7 +27,7 @@ def call(cmd, timeout=300, **args):
 
 @mcp.tool()
 def status() -> dict:
-    """Current take, fixes, locks, pins, fidelity gate and physics flags."""
+    """Current take, fixes, locks, pins, fidelity gate, physics flags, the judge (blocker/warning counts and findings), and the FIX solver state, last run and toggleable FIX changes."""
     return call("status")
 
 
@@ -71,7 +71,7 @@ def save_project(name: str) -> dict:
 
 @mcp.tool()
 def add_fix(fix: dict) -> dict:
-    """Append one fix and rebuild. Types: travel{a,b,speed m/s,ease,plant,reach|footsteps,balance,width,cycle,contact} (footsteps=True places Biped footprints: run contact 0.6 leg/speed, COM ahead of the stance foot by 0.9595 v + 0.0107 leg, half width 0.1 leg; balance = Biped balanceFactor), story{at,pre,post,curve,match}, lean{a,b,deg,ease}, smooth{a,b}, ground{a,b,side?}, momentum{a,b}, ballistic{a,b}, floor{a,b}|{whole:true}, level{side?}, roll{a,b,side}, seams{blend}, pull{pull,gravity}, despike{a,b}, filter{a,b,fc}, median{a,b,window}, plus any type app.js understands."""
+    """Append one fix and rebuild. Types: travel{a,b,speed m/s,ease,plant,reach|footsteps,balance,width,cycle,contact} (footsteps=True places Biped footprints: run contact 0.6 leg/speed, COM ahead of the stance foot by 0.9595 v + 0.0107 leg, half width 0.1 leg; balance = Biped balanceFactor), story{at,pre,post,curve,match}, lean{a,b,deg,ease}, smooth{a,b}, ground{a,b,side?}, momentum{a,b}, ballistic{a,b}, floor{a,b}|{whole:true}, level{side?}, roll{a,b,side}, seams{blend}, pull{pull,gravity}, despike{a,b,bones?}, filter{a,b,fc,bones?}, median{a,b,window}, knee{side,a,b,mode spike|wobble|extension,strength?,maxDeg?} (re-times the knee angle about its own hinge), ankleLock{side,a,b,perimeter cm,maxSlide m/s,floorProximity cm,recovery s} (holds the foot on an anchor; maxSlide>0 lets the anchor slide), plus any type app.js understands."""
     return call("add_fix", fix=fix)
 
 
@@ -131,7 +131,7 @@ def set_locks(locks: list) -> dict:
 
 @mcp.tool()
 def set_pins(pins: list) -> dict:
-    """Replace hand pins: [{a,b,ref,off:16 floats}] grip pins or [{a,b,ref,world:16 floats}] world pins, then rebuild."""
+    """Replace hand pins: [{a,b,ref,off:16 floats}] grip pins or [{a,b,ref,world:16 floats}] world pins, then rebuild. Pins hold the left hand; add hand:'r' to pin the right hand (a grip pin is then relative to the left hand)."""
     return call("set_pins", pins=pins)
 
 
@@ -154,8 +154,20 @@ def retime(scale: float) -> dict:
 
 
 @mcp.tool()
+def fix(max_trials: int = 80) -> dict:
+    """One-click FIX, the same as the studio's FIX button. It judges the take once with wire/judge.js (foot slides inside real plants, floats, pose snaps, feet under the floor, failed locks and pins, seam jumps, knee pops/wobble/hyperextension, jitter, hand and knee slips, foot tilt), then works stage by stage (noise, shot seams, body and root, contacts, polish): for each problem it tries a fix and its parameter variants through a full rebuild and keeps one only when the score drops without new blockers or broken locks, pins or bone lengths. It turns on the FIX solver (root fixes chained in order, one shared floor) and saves that with the project. One undo step for the whole run. It stops before export. Returns the plain-English report, kept and reverted changes, flagged frame ranges and the final state; every kept change has an id for fix_layer."""
+    return call("fix", timeout=3600, max_trials=max_trials)
+
+
+@mcp.tool()
+def fix_layer(id: str, on: bool = True) -> dict:
+    """Switch one kept FIX change (an id from fix() or status().fix.layers, such as fix-1-3) off or back on. Off moves its fixes, locks and pins aside (saved with the project as muted); on puts them back. Rebuilds; one undo step."""
+    return call("fix_layer", id=id, on=on)
+
+
+@mcp.tool()
 def auto_fix(max_rounds: int = 4) -> dict:
-    """Run the Auto Fix loop: judge with Fulcrum's own checks (physics flags for foot slide, float and pose snaps; motion quality for feet below the floor, failed foot locks and hand pins, invalid transforms; sliding foot plants), plan one fix per blocker (ground, floor, despike, foot locks, level, smooth, travel toe/pitch), apply each through fixes/locks + rebuild and keep it only if blockers (then warnings) drop. Returns start/end blocker counts, kept and reverted changes and the final state."""
+    """The older Auto Fix loop (FIX replaces it; kept for scripts). It judges with the same checks as FIX (wire/judge.js), plans one fix per blocker (ground, floor, despike, foot locks, level, smooth, travel toe/pitch), applies each through fixes/locks + rebuild and keeps it only if blockers (then warnings) drop. One undo step. Returns start/end blocker counts, kept and reverted changes and the final state."""
     return call("auto_fix", timeout=1800, max_rounds=max_rounds)
 
 
@@ -183,13 +195,13 @@ def screenshot(frame: int | None = None, view: str = "side", width: int = 640, h
 
 @mcp.tool()
 def export_fbx(name: str, override: bool = False) -> dict:
-    """Export the current output to exports/<name>.fbx through Blender with the round-trip check. Blocked by motion-quality blockers (failed foot locks or hand pins, invalid transforms) unless override=True."""
+    """Export the current output to exports/<name>.fbx through Blender with the round-trip check. Blocked while the checks report blockers (see status().judge or run fix first) unless override=True. fix never exports by itself."""
     return call("export_fbx", timeout=900, name=name, override=override)
 
 
 @mcp.tool()
 def eval_js(code: str) -> object:
-    """Run JavaScript inside the Fulcrum page for anything the other tools do not cover. The body runs as an async function with S (app state), THREE and api {rebuild, autoFix, showFrame, idx, firstIdx, wpos}; return a JSON-serialisable value."""
+    """Run JavaScript inside the Fulcrum page for anything the other tools do not cover. The body runs as an async function with S (app state), THREE and api {rebuild, fixAll, setFixLayer, autoFix, showFrame, idx, firstIdx, wpos}; return a JSON-serialisable value."""
     return call("eval", code=code)
 
 

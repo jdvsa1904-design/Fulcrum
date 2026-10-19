@@ -132,6 +132,16 @@ export function fulcrumFindings({ flags = [], quality = null, slidingPlants = []
   return out.sort((x, y) => (x.severity === 'blocker' ? 0 : 1) - (y.severity === 'blocker' ? 0 : 1) || (x.frame_start ?? -1) - (y.frame_start ?? -1));
 }
 
+// wire/judge.js findings ({rule, severity, a, b, side, bone, phase, value}) in the taste-style shape planFixes reads.
+// Auto Fix judges with judge.js through this: fulcrumFindings above takes analyze() flags, which count every low
+// swing foot as sliding; judge.js counts a slide only inside a Rule A plant.
+export function judgeToLegacy(findings = []) {
+  return (findings ?? []).filter(f => f.severity === 'blocker' || f.severity === 'warning').map(f => ({
+    rule: f.rule, severity: f.severity, frame_start: f.a, frame_end: f.b ?? f.a,
+    body_part: f.bone ?? (f.side ? `foot_${f.side}` : f.rule === 'pop' ? 'whole body' : 'feet'), phase: f.phase ?? null, value: f.value ?? null, text: f.text,
+  }));
+}
+
 const better = (s, t) => s.blockers < t.blockers || (s.blockers === t.blockers && s.warnings < t.warnings);
 const asFindings = r => Array.isArray(r) ? r : r?.findings ?? [];
 
