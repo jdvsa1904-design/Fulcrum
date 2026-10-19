@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -12,6 +13,7 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from fulcrum_config import load as load_config
+from tools import fetch_vendor
 CONFIG = load_config()
 EXPORTS = CONFIG["exports"]
 IMPORTS = CONFIG["imports"]
@@ -156,7 +158,31 @@ def bridge_next(wait, client=None):
         return BRIDGE["queue"].pop(0)
 
 
+def transcode(raw, name):
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None, "ffmpeg is not installed; convert the video to WebM or use Chrome/Edge"
+    work = EXPORTS / "transcode"
+    work.mkdir(parents=True, exist_ok=True)
+    tag = uuid.uuid4().hex
+    src, dst = work / (tag + Path(name).suffix), work / (tag + ".webm")
+    src.write_bytes(raw)
+    try:
+        r = subprocess.run([ffmpeg, "-v", "error", "-y", "-i", str(src), "-an", "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "30", "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1", str(dst)], capture_output=True, timeout=900)
+        if r.returncode != 0 or not dst.is_file():
+            return None, r.stderr.decode(errors="replace")[-2000:]
+        return dst.read_bytes(), None
+    finally:
+        for f in (src, dst):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+
+
 class Handler(SimpleHTTPRequestHandler):
+    extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm", ".task": "application/octet-stream", ".glb": "model/gltf-binary"}
+
     def __init__(self, *a, **k):
         super().__init__(*a, directory=str(ROOT), **k)
 
@@ -172,6 +198,8 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.split('?')[0] == "/api/bridge/next":
             client = self.path.split('client=', 1)[1] if 'client=' in self.path else None
             return self.send_json(bridge_next(20, client))
+        if self.path == "/api/mocap/status":
+            return self.send_json({"vendor": [str(p.relative_to(ROOT)) for p in fetch_vendor.missing(())], "models": sorted(p.stem.replace("pose_landmarker_", "") for p in (ROOT / "vendor" / "models").glob("*.task")), "ffmpeg": bool(shutil.which("ffmpeg"))})
         if self.path == "/api/bridge/alive":
             return self.send_json({"page_seen_s_ago": round(time.time() - BRIDGE["seen"], 1) if BRIDGE["seen"] else None})
         if self.path == "/api/taste-status":
@@ -212,6 +240,16 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(n)
+        if self.path.startswith("/api/transcode"):
+            data, err = transcode(raw, unquote(self.path.split("name=", 1)[1]) if "name=" in self.path else "in.mp4")
+            if data is None:
+                return self.send_json({"error": err}, 500)
+            self.send_response(200)
+            self.send_header("Content-Type", "video/webm")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path == "/api/bridge/connect":
             req = json.loads(raw)
             with BRIDGE["cv"]:
@@ -297,5 +335,6 @@ if __name__ == "__main__":
         print(json.dumps(res))
         sys.exit(1 if res["verdict"] == "fail" else 0)
     port = int(sys.argv[1]) if len(sys.argv) > 1 else CONFIG["port"]
+    fetch_vendor.ensure()
     print(f"Fulcrum on http://localhost:{port}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
