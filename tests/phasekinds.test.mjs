@@ -74,8 +74,13 @@ test('prone crawl: pelvis low and torso horizontal is a prone phase', () => {
 });
 
 test('crouched walk with bent knees is a crouch phase, not a walk', () => {
-  const d = clip(walk(120, { z: 85, speed: 70, stride: 8 }));
+  const d = clip(walk(120, { z: 74, speed: 70, stride: 8 }));
   assert.equal(dominant(d), 'crouch', phasesOf(d).join(' > '));
+});
+
+test('an upright walk on bent knees (aim walk, pelvis near standing height) stays a walk', () => {
+  const d = clip(walk(120, { z: 88, speed: 70, stride: 8 }));
+  assert.equal(dominant(d), 'locomotion', phasesOf(d).join(' > '));
 });
 
 test('kneel is still detected with one knee on the floor', () => {

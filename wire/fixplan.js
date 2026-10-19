@@ -294,7 +294,33 @@ H.bounce = (f, c) => travelCands(f, c, 'bounce');
 H.min_stance_width = H.max_stance_width = (f, c) => travelCands(f, c, 'width');
 H.flight_airtime = H.ballistic_flight = (f, ctx) => H.ground_float({ ...f, phase: 'flight' }, ctx);
 
-export const NO_AUTO_FIX = Object.freeze({ bone_stretch: 'a bone changes length: fix the rig or retarget, not the motion', nonfinite: 'the pose has broken values: reload the take', prop_penetration: 'a hand goes through a prop: move the prop or the hand by hand', balance: 'FIX only reports this; it does not change it' });
+// Library prior (wire/prior.js) findings: joint speed spikes and snaps -> despike/median on that joint's bones (knee:
+// knee spike first), then smooth in polish; a knee bending backwards -> knee extension; planted-foot drift or a sliding
+// flat sole -> the foot_skate lock candidates. The pose, pelvis, frozen-limb and gait-timing ones are report-only.
+const PRIOR_GROUPS = ['knee', 'hip', 'ankle', 'elbow', 'shoulder', 'wrist', 'spine', 'neck'];
+function priorSpike(f, ctx) {
+  const { n, stage, rig } = ctx, bones = f.bones?.length ? f.bones : 'all';
+  if (stage === 'noise') {
+    const [a, b] = clampR(f.a, f.b, 2, n), [a4, b4] = clampR(f.a, f.b, 4, n), what = f.group ? `${f.side ? sideText(f.side) + ' ' : ''}${f.group}` : 'joint';
+    const knee = f.group === 'knee' && f.side ? [{ fixes: [{ type: 'knee', side: f.side, a: f.a, b: f.b, mode: 'spike' }] }, { fixes: [{ type: 'despike', a, b, bones: legBones(rig, f.side) }] }] : [];
+    const main = knee.length ? knee.shift() : { fixes: [{ type: 'despike', a, b, bones }] };
+    return [cand('noise', f.rule, f, 13, `Take the spike out of the ${what} at ${frameText(f.a, f.b)} (faster than the motion library)`, main,
+      [...knee, ...(f.group === 'knee' ? [{ fixes: [{ type: 'despike', a, b, bones }] }] : []), { fixes: [{ type: 'despike', a: a4, b: b4, bones }] }, { fixes: [{ type: 'median', a, b, window: 5, bones }] }])];
+  }
+  if (stage === 'polish') {
+    const [a, b] = clampR(f.a, f.b, 4, n);
+    return [cand('polish', f.rule, f, 52, `Smooth the ${f.group ?? 'joint'} through ${frameText(f.a, f.b)}`, { fixes: [{ type: 'smooth', a, b }] })];
+  }
+  return [];
+}
+for (const g of PRIOR_GROUPS) H[`unnatural_${g}_speed`] = H[`unnatural_${g}_snap`] = priorSpike;
+H.unnatural_knee_hyperextension = (f, ctx) => H.knee_hyperextension(f, ctx);
+H.unnatural_plant_drift = H.unnatural_foot_slide = (f, ctx) => H.foot_skate(f, ctx);
+const PRIOR_REPORT = 'the motion library has nothing this far out; FIX reports it, re-key or re-capture by hand';
+const PRIOR_ONLY = ['unnatural_knee_flexion', 'unnatural_hip_flexion', 'unnatural_hip_extension', 'unnatural_elbow_flexion', 'unnatural_trunk_flexion', 'unnatural_pelvis_height', 'unnatural_pelvis_speed', 'unnatural_pelvis_vspeed', 'unnatural_stance_duty', 'unnatural_step_period'];
+
+export const NO_AUTO_FIX = Object.freeze({ bone_stretch: 'a bone changes length: fix the rig or retarget, not the motion', nonfinite: 'the pose has broken values: reload the take', prop_penetration: 'a hand goes through a prop: move the prop or the hand by hand', balance: 'FIX only reports this; it does not change it',
+  ...Object.fromEntries(PRIOR_ONLY.map(r => [r, PRIOR_REPORT])), unnatural_frozen_limb: 'a limb holds still where library motion always moves it: re-key or re-capture that limb' });
 export const PRIORITY_RULES = Object.keys(H);
 
 export function planCandidates({ findings = [], facts, state, stage, motion = null, rig = facts?.rig ?? {}, n = facts?.n, fps = facts?.fps ?? 30, includeInfo = false }) {

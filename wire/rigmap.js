@@ -4,7 +4,7 @@ export const CORE = ['pelvis', 'spine_01', 'neck_01', 'head', ...['l', 'r'].flat
 export const WANTED = [...CORE, 'ball_l', 'ball_r'];
 
 const keyOf = n => String(n).split(':').pop().split('|').pop().toLowerCase();
-const PREFIX = /^(mixamorig\d*[_:]?|j_(?:bip|adj|sec)_(?:c_)?|cc_base_|def[-_]|bip0*1\s*|biped\s*|character\d*_|rig_|armature_)/;
+const PREFIX = /^(\d{3}_|mixamorig\d*[_:]?|j_(?:bip|adj|sec)_(?:c_)?|cc_base_|def[-_]|bip0*1\s*|biped\s*|character\d*_|rig_|armature_)/;
 const SIDE_TOKEN = /(^|[\s_.\-])([lr])(?=$|[\s_.\-])/;
 const EXCLUDE = /(twist|roll|share|corrective|^ik|pole|nub|end$|metacarpal|bend|adjust|helper|jiggle|breast|eye|jaw|tongue|teeth|hair|skirt|tweak|palm|boneroot)/;
 const SINGLE = [
@@ -19,6 +19,16 @@ const SINGLE = [
   [/^(foot|ankle)$/, 'foot', true],
   [/^(toebase|toes?|toe0|ball)$/, 'ball', true],
 ];
+// Auto-Rig Pro deform names (root.x, spine_01.x, neck.x, shoulder.l, arm_stretch.l, forearm_stretch.l, thigh_stretch.l,
+// leg_stretch.l, toes_01.l, c_index1.l ...) -> names the rules below already know. Only names ending .x/.l/.r are touched.
+const ARP = { root: 'pelvis', neck: 'neck_01', shoulder: 'clavicle', arm: 'upperarm', forearm: 'lowerarm', leg: 'calf', toes_01: 'ball', toes: 'ball',
+  arm_twist: 'upperarm_twist', forearm_twist: 'lowerarm_twist', leg_twist: 'calf_twist', thigh_twist: 'thigh_twist' };
+export function arpAlias(s) {
+  const m = s.match(/^(c_)?(.+?)\.(x|l|r)$/);
+  if (!m) return s;
+  const b = m[2].replace(/_stretch$/, ''), fm = b.match(/^(thumb|index|middle|ring|pinky)(\d)$/), base = fm ? `${fm[1]}_0${fm[2]}` : ARP[b] ?? b;
+  return m[3] === 'x' ? base : `${base}_${m[3]}`;
+}
 const FINGER_RE = /^(?:hand|f)?(thumb|index|pointer|middle|mid|ring|pinky|little)(\d*|proximal|intermediate|distal)$/;
 const FINGER_ALIAS = { pointer: 'index', mid: 'middle', little: 'pinky' };
 const JOINT = { proximal: 1, intermediate: 2, distal: 3 };
@@ -42,7 +52,7 @@ function sideOf(s) {
 export function classify(name, rigify = false) {
   const low = keyOf(name).trim();
   if (/^(org|mch)[-_]/.test(low)) return null;
-  const s = low.replace(PREFIX, '');
+  const s = arpAlias(low.replace(PREFIX, ''));
   if (rigify) {
     const m = s.match(/^spine(?:\.(\d{3}))?$/);
     if (m) {

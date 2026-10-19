@@ -34,8 +34,12 @@ import { retimeMapFrame, retimeTracks } from './wire/timeline.js';
 import { buildAnimatorControls, ikGoalFromOffset, modelGroundY } from './wire/animator_rig.js';
 import { guidanceForFrames, preserveGuidedPoints } from './wire/pose_guidance.js';
 import { planHumanoidRig, skinWeightsForPoint } from './wire/autorig.js';
+import { loadPrior } from './wire/prior.js';
 
 const $ = id => document.getElementById(id);
+// Library-learned motion prior for the judge (tools/motionlib_prior.mjs); the judge runs without it until it loads.
+let motionPrior = null;
+fetch(new URL('./wire/motion_prior.json', import.meta.url)).then(r => r.ok ? r.json() : null).then(j => { motionPrior = j ? loadPrior(j) : null; }).catch(() => {});
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const keyOf = n => n.split(':').pop().split('|').pop().toLowerCase();
 const LOCAL = location.protocol.startsWith('http') && /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
@@ -1524,7 +1528,7 @@ function judgeNow() {
   S.judgement = judgeMotion({ motion: S.out, source: { q: S.take.q, p: S.take.p }, nb, n, fps, upm: S.upm, rig: S.rig,
     names: S.body.bones.map(b => b.name), parents: S.body.parentIdx, restW: S.body.restW, shots: S.take.shots,
     trust: S.take.trust ?? null, state: { fixes: S.fixes, locks: S.locks, pins: judgePins() }, edited: editedSet(), facts: S.facts,
-    ground: S.factsGround, opts: { mu: +$('mu').value || 0.8, snapLim: +$('snapLim').value || 900, gateLim: +$('gateLim').value || 8 } });
+    ground: S.factsGround, prior: motionPrior, opts: { mu: +$('mu').value || 0.8, snapLim: +$('snapLim').value || 900, gateLim: +$('gateLim').value || 8 } });
   S.flags = S.judgement.flags; S.gate = S.judgement.fidelity; S.motionQuality = S.judgement.quality;
   S.contact = { ground: S.facts.ground, per: S.facts.contacts.per, any: S.facts.contacts.feetDown, speed: S.facts.contacts.speed };
   S.com = S.facts.com; S.ground = S.facts.ground;
