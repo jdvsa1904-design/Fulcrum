@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRigMap, renameForExport, CORE } from '../wire/rigmap.js';
+import { readFileSync, existsSync } from 'node:fs';
+import { buildRigMap, renameForExport, CORE, arpAlias } from '../wire/rigmap.js';
+import { parseBVH } from '../mocap/bvh.js';
 
 const FING = ['thumb', 'index', 'middle', 'ring', 'pinky'];
 const cap = s => s[0].toUpperCase() + s.slice(1);
@@ -167,4 +169,52 @@ test('a bare chain reports missing core slots and low confidence', () => {
   const map = buildRigMap(bones);
   assert.equal(map.missing.length, CORE.length + 2);
   assert.equal(map.confidence, 0);
+});
+
+// Auto-Rig Pro deform skeleton as the motion library exports it (numbered BVH joints, .x/.l/.r suffixes, *_stretch bones).
+const ARP_NAMES = { pelvis: 'root.x', spine_01: 'spine_01.x', spine_02: 'spine_02.x', spine_03: 'spine_03.x', neck_01: 'neck.x', head: 'head.x',
+  clavicle: 'shoulder', upperarm: 'arm_stretch', lowerarm: 'forearm_stretch', hand: 'hand', thigh: 'thigh_stretch', calf: 'leg_stretch', foot: 'foot', ball: 'toes_01' };
+function arpSkeleton() {
+  let k = 2;
+  const num = s => `${String(k++).padStart(3, '0')}_${s}`;
+  return skeleton(SIDED(ARP_NAMES, (f, n, s) => num(`c_${f}${n}.${s}`), (s, b) => num(`${b}.${s}`)), { pre: ['000_SK_Insurgent_P8', '001_root'],
+    extras: [['090_arm_twist.l', 'upperarm_l'], ['091_forearm_twist.r', 'lowerarm_r'], ['092_leg_twist.l', 'calf_l'], ['093_thigh_twist.r', 'thigh_r']] })
+    .map(b => b.canon && !/^\d{3}_/.test(b.name) ? { ...b, name: num(b.name) } : b);
+}
+
+test('Auto-Rig Pro: deform names map by name with full confidence', () => {
+  const bones = arpSkeleton(), map = buildRigMap(bones);
+  for (const b of bones) {
+    if (b.canon) assert.equal(map.toCanonical.get(b.name), b.canon, b.name);
+    else assert.equal(map.toCanonical.has(b.name), false, `extra ${b.name} must stay unmapped`);
+  }
+  assert.deepEqual(map.missing, []);
+  assert.equal(map.confidence, 1);
+  assert.match(map.fromCanonical.get('pelvis'), /root\.x$/);
+  assert.match(map.fromCanonical.get('ball_r'), /toes_01\.r$/);
+  assert.match(map.fromCanonical.get('calf_l'), /leg_stretch\.l$/);
+  assert.match(map.fromCanonical.get('index_01_l'), /c_index1\.l$/);
+});
+
+test('arpAlias rewrites only Auto-Rig Pro suffixed names', () => {
+  assert.equal(arpAlias('root.x'), 'pelvis');
+  assert.equal(arpAlias('thigh_stretch.l'), 'thigh_l');
+  assert.equal(arpAlias('leg_stretch.r'), 'calf_r');
+  assert.equal(arpAlias('toes_01.l'), 'ball_l');
+  assert.equal(arpAlias('c_index1.l'), 'index_01_l');
+  assert.equal(arpAlias('arm_twist.l'), 'upperarm_twist_l');
+  assert.equal(arpAlias('thigh_l'), 'thigh_l');
+  assert.equal(arpAlias('mixamorig:hips'), 'mixamorig:hips');
+});
+
+test('Auto-Rig Pro: a library BVH maps at confidence 1 by name alone', t => {
+  const file = new URL('../data/MotionLibrary/Animations/clip_0004_Anim_Death_Back.bvh', import.meta.url);
+  if (!existsSync(file)) return t.skip('motion library not present');
+  const bvh = parseBVH(readFileSync(file, 'utf8'));
+  const map = buildRigMap(bvh.joints.map((j, i) => ({ name: j.name, parent: j.parent, pos: [i, 0, 0] })));
+  assert.equal(map.confidence, 1);
+  assert.deepEqual(map.missing, []);
+  assert.equal(map.fromCanonical.get('pelvis'), '002_root.x');
+  assert.equal(map.fromCanonical.get('calf_l'), '051_leg_stretch.l');
+  assert.equal(map.fromCanonical.get('ball_l'), '053_toes_01.l');
 });

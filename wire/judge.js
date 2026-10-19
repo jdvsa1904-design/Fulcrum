@@ -3,12 +3,14 @@
 //   finding: { rule, severity: 'blocker'|'warning'|'info', a, b, side, phase, value, limit, unit, source, text }
 // Rule names are a superset of wire/autofix.js fulcrumFindings (foot_slide, ground_float, pop, ground_sink,
 // lock/pin residual, bone stretch, nonfinite) plus overload, seam_jump, knee_*, foot_skate, jitter,
-// hand_slip, knee_slip, foot_tilt and balance.
+// hand_slip, knee_slip, foot_tilt and balance. With a library prior (wire/prior.js model, `prior`), also the
+// 'unnatural_<what>' findings: joint angles, speeds and snaps, pelvis, planted feet and gait outside the library.
 import { inspectMotion } from '../motionquality.js';
 import { seamPlan } from './seams.js';
 import { spikeFrames, kneeWobbleRanges, kneeExtensionFlags } from '../contacts.js';
 import { storyWindow } from './story.js';
 import { computeFacts, comAccel, keyOf, runsOf, phaseOf, frameText, sideText, wpos } from './facts.js';
+import { priorFindings } from './prior.js';
 
 export const JUDGE_DEFAULTS = Object.freeze({
   mu: 0.8, snapLim: 900, gateLim: 8, edgeGuard: 3, slideSpeed: 0.3, sinkTol_cm: 2.5, driftLim_cm: 4,
@@ -348,7 +350,8 @@ export function costOf(findings, weights = SEVERITY_WEIGHT) {
 export const countOf = findings => ({ blocker: findings.filter(f => f.severity === 'blocker').length, warning: findings.filter(f => f.severity === 'warning').length, info: findings.filter(f => f.severity === 'info').length });
 
 // motion: { W, q, p } (q/p local, optional); source: { q, p } of the untouched take for fidelity.
-export function judgeMotion({ motion, source = null, nb, n, fps = 30, upm = 100, rig, names = [], parents = null, restW = null, shots = [], trust = null, state = {}, edited = null, ground = null, facts = null, opts = {} }) {
+// prior: a loaded library prior (wire/prior.js loadPrior of wire/motion_prior.json); null leaves it out.
+export function judgeMotion({ motion, source = null, nb, n, fps = 30, upm = 100, rig, names = [], parents = null, restW = null, shots = [], trust = null, state = {}, edited = null, ground = null, facts = null, prior = null, opts = {} }) {
   const o = { ...JUDGE_DEFAULTS, ...opts }, W = motion.W;
   n = n ?? W.length / (nb * 16);
   facts = facts ?? computeFacts({ W, nb, n, fps, upm, rig, restW, shots, trust, ground, opts: o.facts || {} });
@@ -372,6 +375,7 @@ export function judgeMotion({ motion, source = null, nb, n, fps = 30, upm = 100,
     ...slipFindings(facts, o),
     ...tiltFindings({ W, nb, facts, tiltDeg: o.tiltDeg }),
     ...balanceFindings(facts, o),
+    ...(prior ? priorFindings({ model: prior, facts, W, nb, rig, opts: o.prior || {} }) : []),
   ];
   findings = scopeByPhase(mergeOverlaps(findings), facts);
   const sevRank = { blocker: 0, warning: 1, info: 2 };

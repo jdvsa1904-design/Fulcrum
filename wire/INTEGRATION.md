@@ -9,6 +9,7 @@ Four pure modules: no DOM, no fetch, browser and Node. Tests: `tests/fix_engine.
 | `wire/fixplan.js` | `planCandidates()`: rule to fix, phase-aware, with parameter variants. Also `applyChange`, `withoutFixIds` and `chainRootOffsets`. |
 | `wire/fixengine.js` | `runFix()`: a stage-by-stage keep-or-revert loop. It is judge-agnostic, has no undo side effects and stops before export. |
 | `wire/phaseadapter.js` | Loads `segmentPhases` from `phases.js`, or from `tastebridge.js` if `phases.js` is missing. |
+| `wire/prior.js` | Library-learned motion prior: `loadPrior(json)`, `priorFindings()`. The model is `wire/motion_prior.json`, built by `tools/motionlib_prior.mjs` from the motion library. `judgeMotion({ ..., prior })` adds its `unnatural_*` findings; app.js fetches the JSON at startup and passes it. Tests: `tests/prior.test.mjs`. |
 
 ## 1. Inputs app.js already has
 
@@ -158,5 +159,10 @@ async function fixAll() {
 | `hand_slip` / `knee_slip` | warning | |
 | `foot_tilt` | warning | needs `restW` |
 | `balance` | info | |
+| `unnatural_<joint>_speed` / `_snap` | warning; blocker when far past the band for 3+ frames | prior: joint angular speed, or a one-frame excursion from the neighbouring frames, outside the library's per-phase 99.5% band. Fix: despike/median on that joint (knee: knee spike first), smooth in polish |
+| `unnatural_knee_hyperextension` | warning (blocker past 30 deg) | prior: knee bends backwards past 10 deg (fixed limit; the library knees never straighten, so there is no "must bend" rule). Fix: knee extension |
+| `unnatural_frozen_limb` | warning | prior: a leg moves less than a third of the library minimum in a gait phase. Report only |
+| `unnatural_plant_drift` / `unnatural_foot_slide` | warning | prior: plant drift or flat-sole speed past the library band. Fix: foot lock (as foot_skate) |
+| `unnatural_<joint>_flexion` / `_extension`, `unnatural_pelvis_*`, `unnatural_stance_duty`, `unnatural_step_period` | warning | prior: pose, pelvis and gait timing outside the library. Report only |
 
 The rules are scoped per phase: `PHASE_SCOPE` drops airborne foot rules in flight, vault and prone, and softens slides in a slide phase to info. `RULE_ALIASES` maps other judges' names to these.
