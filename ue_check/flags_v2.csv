@@ -1,0 +1,9 @@
+bone,space,frame_from,frame_to,ue_step,src_step,artifact
+lowerarm_l,local,25,26,26.669,26.669,False
+lowerarm_l,local,26,27,36.859,36.859,False
+lowerarm_l,local,215,216,36.067,36.067,False
+lowerarm_l,local,219,220,32.662,32.662,False
+lowerarm_l,local,220,221,31.169,31.169,False
+lowerarm_l,component,25,26,26.005,26.005,False
+lowerarm_l,component,26,27,28.719,28.719,False
+lowerarm_l,component,215,216,31.612,31.612,False

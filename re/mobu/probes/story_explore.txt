@@ -1,0 +1,43 @@
+Start | time | FBTime(0) | 
+Stop | time | FBTime(588000000) | 
+ClipColor | ColorRGB | FBColor(0.85098, 0.45098, 0.45098) | 
+StartStopLocked | bool | False | 
+ExtractStart | time | FBTime(0) | 
+ExtractStop | time | FBTime(588000000) | 
+FirstLoopMarkIn | time | FBTime(0) | 
+LastLoopMarkOut | time | FBTime(588000000) | 
+Speed | double | 1.0 | 
+TimeWarpEnabled | bool | True | 
+Reverse | bool | False | 
+BlendAlgorythm | enum | 1 | ['Normal', 'Match Object']
+InInterpolator | enum | 1 | ['Custom', 'Linear', 'Smooth', 'Slow', 'Fast']
+OutInterpolator | enum | 1 | ['Custom', 'Linear', 'Smooth', 'Slow', 'Fast']
+WarpInterpolator | enum | 1 | ['Custom', 'Normal', 'Smoothed Ends', 'Going Faster', 'Slowing Down', 'Reversed', 'Reversed, Smoothed Ends', 'Reversed, Going Faster', 'Reversed, Slowing Down']
+PreBlendStart | time | FBTime(0) | 
+PreBlendStop | time | FBTime(0) | 
+PostBlendStart | time | FBTime(0) | 
+PostBlendStop | time | FBTime(588000000) | 
+ClipTranslation | Vector3d | FBVector3d(0, 0, 0) | 
+ClipRotation | Vector3d | FBVector3d(0, -26.5651, 0) | 
+LoopTranslation | Vector3d | FBVector3d(100, 0, 50) | 
+AutoLoop | bool | True | 
+LoopEnable | bool | True | 
+Take | enum | 0 | ['Story anim stack']
+Loaded | bool | True | 
+PivotAlgorythm | enum | 2 | ['Average', 'Project on XZ plane', '<None>']
+Pivot | object | ? | 
+TravellingNode | object | ? | 
+TravellingNodeAlgorythm | enum | 2 | ['Average', 'Project on XZ plane', '<None>']
+Ghost | bool | True | 
+GhostModel | bool | True | 
+GhostTravelling | bool | True | 
+GhostPivot | bool | True | 
+ShowGhostClipMode | enum | 1 | ['Always', 'Based on time cursor', 'Custom']
+GhostCustomTime | time | FBTime(0) | 
+GhostManipulatorMode | enum | 1 | ['Current', 'Start', 'Stop', 'Custom']
+GhostManipulatorCustomTime | time | FBTime(0) | 
+ClipAnimationPath | charptr |  | 
+GhostManipulatorOffset | Vector3d | FBVector3d(0, 0, 0) | 
+Motion | object | ? | 
+OriginalPathForEmbeddedManagement | charptr |  | 
+['AudioClip', 'AutoLoop', 'BeginChange', 'CanAssignSourcesToDestinations', 'ClassGroupName', 'ClassName', 'ClipAnimationPath', 'ClipAudioPath', 'ClipPitch', 'ClipVideoPath', 'Clone', 'Color', 'Components', 'ConnectDst', 'ConnectDstAt', 'ConnectSrc', 'ConnectSrcAt', 'ConnectedToTake', 'CustomTimeWarp', 'DestinationSetObject', 'DisableObjectFlags', 'DisconnectAllDst', 'DisconnectAllSrc', 'DisconnectDst', 'DisconnectDstAt', 'DisconnectSrc', 'DisconnectSrcAt', 'EnableObjectFlags', 'EndChange', 'ExportToFile', 'FBCreate', 'FBDelete', 'FBDestroy', 'FirstLoopMarkIn', 'FrameRate', 'FullName', 'GetAffectedAnimationNodes', 'GetAffectedObjects', 'GetAssignSourcesToDestinationsInfoEx', 'GetContentModified', 'GetDst', 'GetDstCount', 'GetDstType', 'GetObjectFlags', 'GetObjectStatus', 'GetOwned', 'GetOwnedCount', 'GetOwner', 'GetOwnerFileReference', 'GetPlugConnectionModifiedList', 'GetReadOnly', 'GetSelfModified', 'GetSourceTimeFromDestinationTime', 'GetSrc', 'GetSrcCount', 'GetSrcType', 'GetStatusFlag', 'Ghost', 'GhostCustomTime', 'GhostManipulatorCustomTime', 'GhostManipulatorMode', 'GhostManipulatorOffset', 'GhostModel', 'GhostPivot', 'GhostTravelling', 'HardSelect', 'HasObjectFlags', 'ImageSequence', 'Is', 'IsSDKComponent', 'LastLoopMarkOut', 'Loaded', 'LockPitchToSpeed', 'LongName', 'Loop', 'LoopTranslation', 'MakeWritable', 'MarkIn', 'MarkOut', 'Match', 'MirrorAnimation', 'MirrorPlane', 'Move', 'MoveSrcAt', 'MoveTo', 'Name', 'Offset', 'OnChange', 'OnUnbind', 'OwnerNamespace', 'Parents', 'Pivots', 'PostBlend', 'PreBlend', 'PrintClassDefinitions', 'ProcessNamespaceHierarchy', 'ProcessObjectNamespace', 'PropertyAdd', 'PropertyAddReferenceProperty', 'PropertyCreate', 'PropertyGetModifiedList', 'PropertyList', 'PropertyRemove', 'Razor', 'ReplaceDstAt', 'ReplaceSrcAt', 'RevertModification', 'Rotation', 'Scale', 'Selected', 'SetAssignSourcesToDestinationsInfo', 'SetContentModified', 'SetObjectFlags', 'SetObjectStatus', 'SetReadOnly', 'SetSelfModified', 'SetStatusFlag', 'SetTime', 'ShotActionStart', 'ShotActionStop', 'ShotBackplate', 'ShotCamera', 'ShotFrontplate', 'ShotStartStopLocked', 'ShowBackplate', 'ShowEmbeddedTimecode', 'ShowFrontplate', 'ShowGhostClipMode', 'SolvingMode', 'SourceMarkIn', 'SourceMarkOut', 'Speed', 'Start', 'StartStopLocked', 'Stop', 'SwapSrc', 'TimeWarpEnabled', 'TimeWarpInterpolatorType', 'TimeWarpReverse', 'Translation', 'TravellingNode', 'TravellingNodeFunction', 'TypeInfo', 'UpdateFromCurrentTake', 'UseSystemFrameRate']

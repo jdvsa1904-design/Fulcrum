@@ -1,0 +1,15 @@
+Butterworth: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807); Cut-off Frequency (Hz)=7.0; Sampling Rate (fps)=24.0; Keys On Frame=True
+Constant Key Reducer: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807); Keep At Least One Keyframe=True
+Cut: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807)
+Gimbal Killer: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807)
+Key Reducing: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807); Precision=1.0; Key Sync=False
+Key Sync: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807)
+Keys on Frame: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807); Frame Rate=24.0
+Peak Removal: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807)
+Reinterpolate: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807); Resample=True; Resample Frame Rate=24.0
+Resample: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807); Frame Rate=24.0; Keys On Frame=True; With interpolation=True
+Smooth: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807); Width=FBTime(23520000); Sample Count=8.0; Use Quaternions=True
+Smooth Translation: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807); Width=FBTime(37632000); Factor=1.5; Sample Count=8.0
+Time Shift And Scale: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807); Shift=FBTime(0); Scale=1.0
+Transformation: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807); Translation=FBVector3d(0, 0, 0); Rotation=FBVector3d(0, 0, 0); Scaling=FBVector3d(1, 1, 1)
+Unroll Rotations: Start=FBTime(-9223372036854775807); Stop=FBTime(9223372036854775807); Quality=0.25; Path=False

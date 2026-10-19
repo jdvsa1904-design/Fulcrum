@@ -1,0 +1,5 @@
+bone,space,frame_from,frame_to,ue_step,src_step,artifact
+hand_l,local,307,308,25.609,25.609,False
+hand_l,component,220,221,31.212,31.212,False
+hand_l,component,307,308,27.084,27.084,False
+hand_l,component,344,345,28.63,28.63,False

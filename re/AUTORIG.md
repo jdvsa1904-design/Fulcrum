@@ -1,0 +1,9 @@
+# Fulcrum import and starter auto-rig
+
+Implemented 2026-10-16. Scene → **Import + auto-rig FBX…** stores the source FBX in `exports/`, preserving its SHA-256 reference for project reopen. An FBX with a skinned skeleton is characterized into Fulcrum's humanoid map and animator controls. An FBX with no bones and an upright Y-up humanoid mesh receives a 23-bone skeleton, four normalized skin influences per vertex, and a skinned mesh. Non-humanoid proportions are rejected rather than silently rigged. An FBX with bones but an unskinned mesh is also rejected rather than losing the visible mesh.
+
+The generated rig is deliberately a **starter fit**: joint locations use bounding-box proportions and weights use nearby body regions. It does not infer anatomy from topology, resolve fused limbs, detect front/back orientation, author joint limits, paint production-quality weights, or handle quadrupeds and props. Inspect shoulder, hip, knee, elbow, and deformation quality before using it on a production character. Existing pre-rigged FBX remains the preferred import path.
+
+The source project records `bodyAutoRig` and reconstructs the generated skeleton when reopened. A motion take can be appended/retargeted onto it. For FBX export, Fulcrum serializes the generated skinned bind rig to GLB and Blender imports it before applying sampled animation.
+
+Smoke test: `tests/fixtures/make_unrigged_fbx.py` generated an unrigged humanoid FBX. UI import produced a 23-bone skinned mesh; a 101-frame FRT shot retargeted; Blender matched 23/23 bones and exported `exports/autorig_smoke_20261016.fbx`; Fulcrum round-trip validation reported 0.00 cm maximum and mean joint-position error. The saved `.fulcrum.json` project reopened with the starter rig and take. This is pipeline integrity evidence, not a deformation-quality pass.

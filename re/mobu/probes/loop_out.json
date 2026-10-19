@@ -1,0 +1,275 @@
+{
+ "init": {
+  "Start": 0,
+  "Stop": 100,
+  "FirstLoopMarkIn": 0,
+  "LastLoopMarkOut": 100,
+  "ExtractStart": 0,
+  "ExtractStop": 100,
+  "ClipTranslation": "FBVector3d(10, 0, 5)",
+  "ClipRotation": "FBVector3d(0, -26.5651, 0)",
+  "LoopTranslation": "FBVector3d(100, 0, 50)",
+  "AutoLoop": "True",
+  "LoopEnable": "True",
+  "SourceMarkIn": 0,
+  "SourceMarkOut": 100,
+  "Offset": 0
+ },
+ "init_vals": [
+  [
+   10.0,
+   2.0,
+   5.0
+  ],
+  [
+   60.0,
+   7.0,
+   30.0
+  ],
+  [
+   110.0,
+   12.0,
+   55.0
+  ]
+ ],
+ "afterLoop": {
+  "Start": 0,
+  "Stop": 100,
+  "FirstLoopMarkIn": 0,
+  "LastLoopMarkOut": 100,
+  "ExtractStart": 0,
+  "ExtractStop": 100,
+  "ClipTranslation": "FBVector3d(10, 0, 5)",
+  "ClipRotation": "FBVector3d(0, -26.5651, 0)",
+  "LoopTranslation": "FBVector3d(100, 0, 50)",
+  "AutoLoop": "True",
+  "LoopEnable": "True",
+  "SourceMarkIn": 0,
+  "SourceMarkOut": 100,
+  "Offset": 0
+ },
+ "setLLMO": {
+  "Start": 0,
+  "Stop": 100,
+  "FirstLoopMarkIn": 0,
+  "LastLoopMarkOut": 100,
+  "ExtractStart": 0,
+  "ExtractStop": 100,
+  "ClipTranslation": "FBVector3d(10, 0, 5)",
+  "ClipRotation": "FBVector3d(0, -26.5651, 0)",
+  "LoopTranslation": "FBVector3d(100, 0, 50)",
+  "AutoLoop": "True",
+  "LoopEnable": "True",
+  "SourceMarkIn": 0,
+  "SourceMarkOut": 100,
+  "Offset": 0
+ },
+ "setLLMO_vals": [
+  [
+   0,
+   10.0,
+   2.0,
+   5.0
+  ],
+  [
+   50,
+   60.0,
+   7.0,
+   30.0
+  ],
+  [
+   99,
+   109.0,
+   11.9,
+   54.5
+  ],
+  [
+   100,
+   110.0,
+   12.0,
+   55.0
+  ],
+  [
+   101,
+   110.0,
+   12.0,
+   55.0
+  ],
+  [
+   150,
+   110.0,
+   12.0,
+   55.0
+  ],
+  [
+   200,
+   110.0,
+   12.0,
+   55.0
+  ],
+  [
+   201,
+   110.0,
+   12.0,
+   55.0
+  ],
+  [
+   250,
+   110.0,
+   12.0,
+   55.0
+  ]
+ ],
+ "setStop": {
+  "Start": 0,
+  "Stop": 250,
+  "FirstLoopMarkIn": 0,
+  "LastLoopMarkOut": 250,
+  "ExtractStart": 0,
+  "ExtractStop": 250,
+  "ClipTranslation": "FBVector3d(10, 0, 5)",
+  "ClipRotation": "FBVector3d(0, -26.5651, 0)",
+  "LoopTranslation": "FBVector3d(100, 0, 50)",
+  "AutoLoop": "True",
+  "LoopEnable": "True",
+  "SourceMarkIn": 0,
+  "SourceMarkOut": 250,
+  "Offset": 0
+ },
+ "setStop_vals": [
+  [
+   0,
+   10.0,
+   2.0,
+   5.0
+  ],
+  [
+   50,
+   60.0,
+   7.0,
+   30.0
+  ],
+  [
+   99,
+   109.0,
+   11.9,
+   54.5
+  ],
+  [
+   100,
+   110.0,
+   12.0,
+   55.0
+  ],
+  [
+   101,
+   110.0,
+   12.0,
+   55.0
+  ],
+  [
+   150,
+   110.0,
+   12.0,
+   55.0
+  ],
+  [
+   200,
+   110.0,
+   12.0,
+   55.0
+  ],
+  [
+   201,
+   110.0,
+   12.0,
+   55.0
+  ],
+  [
+   250,
+   110.0,
+   12.0,
+   55.0
+  ]
+ ],
+ "srcmap": [
+  [
+   50,
+   50,
+   0
+  ],
+  [
+   100,
+   100,
+   0
+  ],
+  [
+   101,
+   101,
+   0
+  ],
+  [
+   150,
+   150,
+   0
+  ],
+  [
+   201,
+   201,
+   0
+  ],
+  [
+   250,
+   250,
+   0
+  ]
+ ],
+ "offset20": {
+  "Start": 0,
+  "Stop": 250,
+  "FirstLoopMarkIn": 0,
+  "LastLoopMarkOut": 250,
+  "ExtractStart": 0,
+  "ExtractStop": 250,
+  "ClipTranslation": "FBVector3d(10, 0, 5)",
+  "ClipRotation": "FBVector3d(0, -26.5651, 0)",
+  "LoopTranslation": "FBVector3d(100, 0, 50)",
+  "AutoLoop": "True",
+  "LoopEnable": "True",
+  "SourceMarkIn": 0,
+  "SourceMarkOut": 250,
+  "Offset": 0
+ },
+ "offset20_vals": [
+  [
+   0,
+   10.0,
+   2.0,
+   5.0
+  ],
+  [
+   50,
+   60.0,
+   7.0,
+   30.0
+  ],
+  [
+   80,
+   90.0,
+   10.0,
+   45.0
+  ],
+  [
+   81,
+   91.0,
+   10.1,
+   45.5
+  ],
+  [
+   150,
+   110.0,
+   12.0,
+   55.0
+  ]
+ ]
+}

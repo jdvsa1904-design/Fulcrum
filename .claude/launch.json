@@ -1,0 +1,1 @@
+{"version":"0.0.1","configurations":[{"name":"fulcrum","runtimeExecutable":"python","runtimeArgs":["C:/Projects/Fulcrum/server.py","8790"],"port":8790}]}

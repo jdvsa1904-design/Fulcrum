@@ -1,0 +1,384 @@
+{
+ "tag": "v3",
+ "half_samples": 711,
+ "worst": {
+  "excess": [
+   2.8035909224924325,
+   "hand_l",
+   "component",
+   99
+  ],
+  "key_mismatch": [
+   2.9575586669421963e-06,
+   "thigh_l",
+   "component",
+   76
+  ]
+ },
+ "rows": [
+  {
+   "bone": "root",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 0,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "pelvis",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 201,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "spine_01",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 8,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "spine_02",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 182,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "spine_03",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 11,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "spine_04",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 196,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "spine_05",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 6,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "thigh_l",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 37,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "thigh_r",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 194,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "calf_l",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 197,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "calf_r",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 198,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "foot_l",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 5,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "foot_r",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 314,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "ball_l",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 0,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "ball_r",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 182,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "clavicle_l",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 198,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "clavicle_r",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 4,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "upperarm_l",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 0,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "upperarm_r",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 322,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "lowerarm_l",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 119,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "lowerarm_r",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 194,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "hand_l",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 12,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "hand_r",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 7,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "neck_01",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 312,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "neck_02",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 11,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "head",
+   "space": "local",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 5,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "root",
+   "space": "component",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 0,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "pelvis",
+   "space": "component",
+   "max_midframe_excess_deg": 0.0,
+   "frame": 201,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "spine_01",
+   "space": "component",
+   "max_midframe_excess_deg": 0.0321,
+   "frame": 100,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "spine_02",
+   "space": "component",
+   "max_midframe_excess_deg": 0.054,
+   "frame": 100,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "spine_03",
+   "space": "component",
+   "max_midframe_excess_deg": 0.0415,
+   "frame": 100,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "spine_04",
+   "space": "component",
+   "max_midframe_excess_deg": 0.0266,
+   "frame": 99,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "spine_05",
+   "space": "component",
+   "max_midframe_excess_deg": 0.0361,
+   "frame": 99,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "thigh_l",
+   "space": "component",
+   "max_midframe_excess_deg": 0.2539,
+   "frame": 99,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "thigh_r",
+   "space": "component",
+   "max_midframe_excess_deg": 0.7758,
+   "frame": 100,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "calf_l",
+   "space": "component",
+   "max_midframe_excess_deg": 0.7503,
+   "frame": 100,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "calf_r",
+   "space": "component",
+   "max_midframe_excess_deg": 1.2118,
+   "frame": 100,
+   "frames_excess_over_1deg": 1
+  },
+  {
+   "bone": "foot_l",
+   "space": "component",
+   "max_midframe_excess_deg": 0.3864,
+   "frame": 100,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "foot_r",
+   "space": "component",
+   "max_midframe_excess_deg": 0.6033,
+   "frame": 100,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "ball_l",
+   "space": "component",
+   "max_midframe_excess_deg": 0.0907,
+   "frame": 262,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "ball_r",
+   "space": "component",
+   "max_midframe_excess_deg": 1.442,
+   "frame": 100,
+   "frames_excess_over_1deg": 1
+  },
+  {
+   "bone": "clavicle_l",
+   "space": "component",
+   "max_midframe_excess_deg": 0.0214,
+   "frame": 100,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "clavicle_r",
+   "space": "component",
+   "max_midframe_excess_deg": 0.0866,
+   "frame": 99,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "upperarm_l",
+   "space": "component",
+   "max_midframe_excess_deg": 0.1807,
+   "frame": 100,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "upperarm_r",
+   "space": "component",
+   "max_midframe_excess_deg": 0.7356,
+   "frame": 99,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "lowerarm_l",
+   "space": "component",
+   "max_midframe_excess_deg": 0.2327,
+   "frame": 99,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "lowerarm_r",
+   "space": "component",
+   "max_midframe_excess_deg": 0.7443,
+   "frame": 99,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "hand_l",
+   "space": "component",
+   "max_midframe_excess_deg": 2.8036,
+   "frame": 99,
+   "frames_excess_over_1deg": 2
+  },
+  {
+   "bone": "hand_r",
+   "space": "component",
+   "max_midframe_excess_deg": 0.7818,
+   "frame": 263,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "neck_01",
+   "space": "component",
+   "max_midframe_excess_deg": 0.0798,
+   "frame": 99,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "neck_02",
+   "space": "component",
+   "max_midframe_excess_deg": 0.0536,
+   "frame": 99,
+   "frames_excess_over_1deg": 0
+  },
+  {
+   "bone": "head",
+   "space": "component",
+   "max_midframe_excess_deg": 0.0593,
+   "frame": 263,
+   "frames_excess_over_1deg": 0
+  }
+ ]
+}

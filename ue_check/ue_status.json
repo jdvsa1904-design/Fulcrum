@@ -1,0 +1,14 @@
+{
+ "v6": {
+  "classes": [
+   "Skeleton",
+   "Skeleton",
+   "SkeletalMesh",
+   "SkeletalMesh",
+   "AnimSequence"
+  ],
+  "seqs": [
+   "/Game/Check_v6/FRT_fulcrum_v6_Anim.FRT_fulcrum_v6_Anim"
+  ]
+ }
+}

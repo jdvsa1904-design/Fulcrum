@@ -1,0 +1,26 @@
+{
+ "v3": {
+  "classes": [
+   "Skeleton",
+   "Skeleton",
+   "SkeletalMesh",
+   "SkeletalMesh",
+   "AnimSequence"
+  ],
+  "seqs": [
+   "/Game/Half_v3/FRT_fulcrum_v3_Anim.FRT_fulcrum_v3_Anim"
+  ]
+ },
+ "v2": {
+  "classes": [
+   "Skeleton",
+   "Skeleton",
+   "SkeletalMesh",
+   "SkeletalMesh",
+   "AnimSequence"
+  ],
+  "seqs": [
+   "/Game/Half_v2/FRT_fulcrum_v2_Anim.FRT_fulcrum_v2_Anim"
+  ]
+ }
+}
