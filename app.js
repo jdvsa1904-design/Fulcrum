@@ -18,11 +18,10 @@ import { hikRetargetSetup, hikRetargetFrame, dstWorldRotations } from './wire/hi
 import { planFootsteps, balanceShift } from './wire/footsteps.js';
 import { compileLayers, evalRotation, evalTranslation, solveLayerKey, setLayerKey, normalizeLayer } from './wire/animlayers.js';
 import { buildRigMap, CORE as RIG_CORE } from './wire/rigmap.js';
-import { autoFixLoop } from './wire/autofix.js';
+import { autoFixLoop, fulcrumFindings } from './wire/autofix.js';
 import { createGraphEditor, layerToCurves, curvesToLayer } from './ui/grapheditor.js';
 import { applyStoryBlends, storyWindow, cutIndex, insertIndex } from './wire/story.js';
 import { contactGizmoScale, gizmoFootMarkers } from './re/hik/contact.js';
-import { BONES, boneIndices, tasteInput, summarize, phasedTasteInput, groupByPhase } from './tastebridge.js';
 import { applyAdvancedMotion, assistedPose, validatePose } from './advanced.js';
 import { suggestPoses } from './poseassist.js';
 import { parsePoseModel, predictNextPose } from './wire/posemodel.js';
@@ -66,7 +65,7 @@ function setWorkspace(name) {
 }
 document.querySelectorAll('[data-workspace]').forEach(button =>
   button.addEventListener('click', () => setWorkspace(button.dataset.workspace)));
-const ACTION_WORKSPACE = {loadFRT:'scene',rigKeyFk:'rig',assistPose:'animate',lockL:'rig',lockR:'rig',pinHand:'rig',runTaste:'review'};
+const ACTION_WORKSPACE = {loadFRT:'scene',rigKeyFk:'rig',assistPose:'animate',lockL:'rig',lockR:'rig',pinHand:'rig'};
 document.querySelectorAll('.tool-shelf [data-action]').forEach(button =>
   button.addEventListener('click', () => {
     if (ACTION_WORKSPACE[button.dataset.action]) setWorkspace(ACTION_WORKSPACE[button.dataset.action]);
@@ -287,7 +286,7 @@ function setBody(obj, name, bytes, source = { location: 'samples', name }, autor
   if (comPath) { overlay.remove(comPath); comPath = null; }
   comMarker.visible = false; comDrop.visible = false;
   $('hud').textContent = autorig?.kind === 'generated' ? 'Starter auto-rig · inspect fit and weights' : 'No take loaded';
-  $('frameLbl').textContent = 'No take loaded'; $('selLbl').textContent = ''; $('flagList').replaceChildren(); $('gate').replaceChildren(); $('taste').replaceChildren(); drawTL();
+  $('frameLbl').textContent = 'No take loaded'; $('selLbl').textContent = ''; $('flagList').replaceChildren(); $('gate').replaceChildren(); drawTL();
   renderShots();
 }
 
@@ -1336,7 +1335,6 @@ function rebuild() {
   renderLists();
   showFrame(S.frame);
   $('hud').dataset.ms = Math.round(performance.now() - t0);
-  scheduleTaste();
   recordEdit();
 }
 
@@ -1771,8 +1769,9 @@ $('autoLocks').onclick = () => {
   rebuild();
   status(`Auto-detected ${keep.length} foot plants (${S.slidingPlants.length} sliding contacts listed, not locked).`);
 };
-function detectPlantsNow() {
-  const W = runPass(buildBase(), S.rootOff, { layer: true, ik: false }).W, nb = S.body.bones.length, ct = contactsFromWorld(W);
+function detectPlantsNow() { return plantsOf(runPass(buildBase(), S.rootOff, { layer: true, ik: false }).W); }
+function plantsOf(W) {
+  const nb = S.body.bones.length, ct = contactsFromWorld(W);
   const R = S.body.restW, d = (i, j) => new THREE.Vector3().setFromMatrixPosition(R[i]).distanceTo(new THREE.Vector3().setFromMatrixPosition(R[j])) / S.upm * 100;
   const legLength_cm = d(idx('thigh_l'), idx('calf_l')) + d(idx('calf_l'), idx('foot_l'));
   const footLength_cm = idx('ball_l') !== undefined ? Math.max(20, 1.6 * d(idx('foot_l'), idx('ball_l'))) : 26;
@@ -1842,7 +1841,7 @@ function restoreEdit(row){
   try{rebuild();renderAnimLayers();}finally{EDITS.restoring=false;}
 }
 function recordEdit(previous=null){
-  if(EDITS.restoring||EDITS.preview||!S.take)return;
+  if(EDITS.restoring||EDITS.preview||S.autoFixing||!S.take)return;
   const key=JSON.stringify(projectJSON());
   if(EDITS.rows[EDITS.cursor]?.key===key)return;
   if(previous&&!EDITS.rows.length){EDITS.rows.push({...previous,key:JSON.stringify(previous.project)});EDITS.cursor=0;}
@@ -2274,75 +2273,26 @@ $('exportGlb').onclick = async () => {
   $('exportLog').textContent = 'GLB saved: ' + p;
 };
 
-const sevColor = { blocker: 'var(--bad)', warn: 'var(--warn)', info: 'var(--dim)' };
-const phaseName = { locomotion: 'Locomotion', flight: 'Flight', plant: 'Plant / stop', slide: 'Slide', kneel: 'Kneel', rise: 'Rise', stand: 'Stand', 'whole take': 'Whole take' };
-const frRange = (a, b) => a == null ? '' : a === b ? `f${a}` : `f${a}–${b}`;
-const tasteItem = f => `<li><span class="sev" style="background:${sevColor[f.severity] || 'var(--dim)'}"></span><span class="grow" role="button" tabindex="0" title="${(f.plain || f.rule).replace(/"/g, '&quot;')}" ${f.frame_start != null ? `data-sel="${f.frame_start},${f.frame_end}"` : ''}>${f.scope === 'whole take' ? '<b>integrity</b> ' : ''}${f.body_part || f.rule}: ${f.plain || f.rule}</span><span>${frRange(f.frame_start, f.frame_end)}</span></li>`;
-function renderTaste(t, err) {
-  const el = $('taste');
-  if (err) { el.innerHTML = `<p class="note">${err}</p>`; return; }
-  const { summary: s, groups } = groupByPhase(t);
-  const head = `<div class="verdict ${s.verdict === 'pass' ? 'pass' : s.verdict === 'warn' ? '' : 'fail'}">${String(s.verdict).toUpperCase()} · confidence ${s.confidence == null ? 'n/a' : (+s.confidence).toFixed(2)} · ${s.blockers.length} blocker(s), ${s.findings.length} finding(s)</div>`;
-  const um = s.unmeasurable.length ? `<p class="note">Not measurable here: ${s.unmeasurable.map(u => typeof u === 'string' ? u : (u.phase ? u.phase + ' ' : '') + (u.rule || '') + (u.why || u.reason ? ' (' + (u.why || u.reason) + ')' : '')).join('; ')}</p>` : '';
-  if (!t.phases) { el.innerHTML = head + `<ul class="list">${s.findings.map(tasteItem).join('') || '<li>No locomotion problems found.</li>'}</ul>` + um; return; }
-  const rules = g => g.judged === false ? 'integrity only' : (g.rules || []).join(', ');
-  el.innerHTML = head + `<p class="note">Judged per drill phase. Whole-take integrity checks (${(t.integrity_rules || []).join(', ')}) run on every frame and are listed under the phase they land in.</p>`
-    + groups.map(g => `<div class="phase"><div class="phase-head" role="button" tabindex="0" ${g.start != null ? `data-sel="${g.start},${g.end}"` : ''}><span class="phase-name ${g.verdict === 'fail' || g.findings.some(f => f.severity === 'blocker') ? 'fail' : g.findings.some(f => f.severity === 'warn') ? 'warnc' : 'pass'}">${phaseName[g.phase] || g.phase}</span><span>${frRange(g.start, g.end)}</span><span class="phase-rules">${rules(g)}</span></div>`
-      + (g.findings.length ? `<ul class="list">${g.findings.map(tasteItem).join('')}</ul>` : '') + '</div>').join('') + um;
-}
-async function runTaste() {
-  if (!S.out) return null;
-  if (!LOCAL) { renderTaste(null, 'Locomotion taste needs the local Fulcrum server (run server.py).'); return null; }
-  const { map, missing } = boneIndices(k => idx(k));
-  if (missing.length) { renderTaste(null, 'Character is missing bones the taste check needs: ' + missing.join(', ')); return null; }
-  const nb = S.body.bones.length;
-  const body = phasedTasteInput(tasteInput({ W: S.out.W, nb, n: S.take.n, fps: S.take.fps, upm: S.upm, map, restW: S.body.restW.map(m => m.toArray()) }));
-  $('taste').innerHTML = '<p class="note">Judging…</p>';
-  const r = await fetch('/api/taste', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const j = await r.json();
-  if (!r.ok) { renderTaste(null, (j.error || 'taste failed') + (j.detail ? ': ' + j.detail.split(String.fromCharCode(10)).slice(-3).join(' ') : '')); S.taste = null; return { error: j.error, status: r.status }; }
-  S.taste = j;
-  renderTaste(j);
-  return j;
-}
-let tasteTimer = 0, tasteOff = false;
-function scheduleTaste() {
-  if (!LOCAL || tasteOff || S.autoFixing || !$('tasteAuto')?.checked) return;
-  clearTimeout(tasteTimer);
-  tasteTimer = setTimeout(async () => {
-    const r = await runTaste().catch(() => ({ error: 'failed' }));
-    if (r && r.status === 503) tasteOff = true;
-  }, 1500);
-}
-$('runTaste').onclick = () => runTaste().catch(e => renderTaste(null, e.message));
-
 async function autoFix({ maxRounds = 4 } = {}) {
   if (!S.out) throw new Error('load a take first');
-  if (!LOCAL) throw new Error('Auto Fix needs the local Fulcrum server for the taste judge');
   const log = $('autoFixLog'), lines = [];
   const say = t => { lines.push(t); log.textContent = lines.join(String.fromCharCode(10)); };
-  S.autoFixing = true;
-  clearTimeout(tasteTimer);
   const strip = x => { const { hits, ...y } = x; return y; };
   const apply = async st => { S.fixes = st.fixes.map(x => ({ ...x })); S.locks = st.locks.map(x => ({ ...x })); rebuild(); };
-  const judge = async () => {
-    const t = await runTaste();
-    if (!t || t.error) throw new Error('taste judge unavailable: ' + (t?.error || 'no result'));
-    return summarize(t).findings.map(f => ({ ...f, severity: f.severity === 'warn' ? 'warning' : f.severity }));
-  };
-  say('Auto Fix: judging the current take…');
+  const judge = async () => fulcrumFindings({ flags: S.flags, quality: S.motionQuality, slidingPlants: plantsOf(S.out.W).filter(p => p.sliding && !p.touch), contact: S.contact });
+  say('Auto Fix: checking the current take…');
+  const before = editSnapshot();
+  S.autoFixing = true;
   let r;
   try {
     const plants = detectPlantsNow().filter(p => !p.sliding).map(p => ({ side: p.side, a: p.a, b: p.b }));
-    r = await autoFixLoop({ judge, apply, maxRounds, fixes: S.fixes.map(strip), locks: S.locks.map(({ side, a, b }) => ({ side, a, b })), n: S.take.n, fps: S.take.fps, plants, log: say });
-  } finally { S.autoFixing = false; }
-  await runTaste();
+    r = await autoFixLoop({ judge, apply, maxRounds, fixes: S.fixes.map(strip), locks: S.locks.map(({ side, a, b, required }) => required === false ? { side, a, b, required } : { side, a, b }), n: S.take.n, fps: S.take.fps, plants, log: say });
+  } finally { S.autoFixing = false; recordEdit(before); }
   say(`Done (${r.reason}, ${r.rounds} round(s)). Blockers ${r.start.blockers} → ${r.end.blockers}, warnings ${r.start.warnings} → ${r.end.warnings}. Kept ${r.kept.length}, reverted ${r.reverted.length}.`);
   S.autoFixReport = { start: r.start, end: r.end, rounds: r.rounds, reason: r.reason, kept: r.kept, reverted: r.reverted, notes: r.notes };
   return S.autoFixReport;
 }
-$('autoFix').onclick = () => autoFix().catch(e => { $('autoFixLog').textContent = 'Auto Fix failed: ' + e.message; S.autoFixing = false; });
-window.__fulcrumTaste = runTaste;
+$('autoFix').onclick = () => autoFix().catch(e => { $('autoFixLog').textContent = 'Auto Fix failed: ' + e.message; });
 
 async function saveExportSkeleton() {
   const stem = 'skeleton_' + S.body.name.replace(/[^\w.-]/g, '_');
@@ -2367,18 +2317,8 @@ $('exportFbx').onclick = async () => {
   if (!S.out) return;
   const log = $('exportLog');
   if(EDITS.preview){log.textContent='Accept or reject the current preview before exporting.';return;}
-  if(S.motionQuality&&!S.motionQuality.valid&&!$('tasteOverride').checked){log.textContent=`Export stopped: ${S.motionQuality.failedConstraints||0} required contact failures or invalid transforms. Inspect pose and contacts, or choose export anyway.`;return;}
+  if(S.motionQuality&&!S.motionQuality.valid&&!$('exportAnyway').checked){log.textContent=`Export stopped: ${S.motionQuality.failedConstraints||0} required contact failures or invalid transforms. Inspect pose and contacts, or choose export anyway.`;return;}
   if (!LOCAL) { log.textContent = 'FBX export needs the local Fulcrum server (run server.py). It drives Blender to write the FBX.'; return; }
-  log.textContent = 'Judging locomotion before export…';
-  const taste = await runTaste().catch(e => ({ error: e.message }));
-  if (taste && !taste.error) {
-    const blockers = summarize(taste).blockers;
-    if (blockers.length && !$('tasteOverride').checked) {
-      const NL = String.fromCharCode(10);
-      log.textContent = [`Export stopped: ${blockers.length} locomotion blocker(s).`, ...blockers.map(b => `- ${b.phase ? '[' + b.phase + ' ' + frRange(b.frame_start, b.frame_end) + '] ' : ''}${b.body_part || b.rule}: ${b.plain || b.rule}`), 'Fix them, or tick "export anyway".'].join(NL);
-      return;
-    }
-  } else log.textContent = 'Locomotion taste unavailable (' + (taste?.error || 'no result') + '), exporting without it.';
   const name = ($('outName').value || 'fulcrum').replace(/[^\w.-]/g, '_');
   log.textContent = 'Writing frames, Blender is building the FBX…';
   const skelName = await saveExportSkeleton();
@@ -2573,7 +2513,6 @@ const API = {
   select: async ({ a, b }) => { S.sel = a == null ? null : [a, b]; showFrame(a ?? S.frame); return { selection: S.sel }; },
   frame: async ({ f }) => { showFrame(f); return { frame: S.frame }; },
   rebuild: async () => { rebuild(); return summaryState(); },
-  judge: async () => await runTaste(),
   auto_fix: async ({ max_rounds = 4 } = {}) => ({ ...(await autoFix({ maxRounds: max_rounds })), state: summaryState() }),
   graph_editor: async ({ open = true, bone, key_frame, layer } = {}) => {
     if (layer != null) { S.activeLayer = layer; renderAnimLayers(); }
@@ -2604,11 +2543,11 @@ const API = {
     return { png: url.split(',')[1], frame: S.frame, view };
   },
   export_fbx: async ({ name, override = false }) => {
-    $('outName').value = name; $('tasteOverride').checked = !!override;
+    $('outName').value = name; $('exportAnyway').checked = !!override;
     await $('exportFbx').onclick();
     return { log: $('exportLog').textContent };
   },
-  eval: async ({ code }) => { const fn = new Function('S', 'THREE', 'api', 'return (async () => {' + code + '})()'); return await fn(S, THREE, { rebuild, runTaste, showFrame, idx, firstIdx, wpos, sampleTakeHik, appendTake, renderShots, detectFps, bakedClip, geOpen, geKeyBone, geRefresh, GE, selectBone, autoFix, loadBodyBytes, fetchSample, keyOf }); },
+  eval: async ({ code }) => { const fn = new Function('S', 'THREE', 'api', 'return (async () => {' + code + '})()'); return await fn(S, THREE, { rebuild, showFrame, idx, firstIdx, wpos, sampleTakeHik, appendTake, renderShots, detectFps, bakedClip, geOpen, geKeyBone, geRefresh, GE, selectBone, autoFix, loadBodyBytes, fetchSample, keyOf }); },
 };
 async function bridgeLoop() {
   if (!LOCAL) return;

@@ -54,11 +54,6 @@ label{font-size:.8rem;color:var(--muted);display:flex;gap:4px;align-items:center
 .pass{color:var(--ok)}.fail{color:var(--bad)}
 .verdict{font:600 .85rem var(--body);margin-bottom:4px}
 .log{font:.72rem var(--mono);white-space:pre-wrap;margin:0;max-height:160px;overflow:auto;color:var(--muted)}
-#taste .phase{display:flex;flex-direction:column;gap:3px;padding:5px 0;border-top:1px solid var(--line)}
-#taste .phase-head{display:flex;gap:8px;align-items:baseline;font:.76rem var(--mono);cursor:pointer}
-#taste .phase-name{font:600 .8rem var(--body);min-width:6.5em}
-#taste .phase-rules{flex:1;min-width:0;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
-#taste .warnc{color:var(--warn)}
 
 .gepanel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0 6px 6px;display:flex;flex-direction:column;gap:4px;min-height:0}
 .gepanel[hidden]{display:none}
@@ -91,8 +86,6 @@ aside{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
 @media (max-width:860px){aside{overflow:visible}header h1{width:100%}}
 [role="button"]{cursor:pointer}
 [role="button"]:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-#taste .warnc{color:#8a5f00}
-@media (prefers-color-scheme:dark){#taste .warnc{color:var(--warn)}}
 
 /* Apple-inspired desktop treatment adapted from better-design's Apple tokens.
    Fulcrum remains plain HTML/CSS; no React or shadcn runtime is introduced. */
@@ -162,8 +155,6 @@ label{color:var(--muted);font-size:11px;gap:5px}
 #gate table{font-size:10.5px}
 #gate td,#gate th{padding:4px 5px}
 .log{font-size:10px;border-radius:8px;background:var(--bg);padding:8px;max-height:170px}
-#taste .phase{padding:6px 0}
-#taste .phase-head{font-size:10.5px}
 .verdict{font-size:12px}
 @media(max-width:950px){.main{grid-template-columns:minmax(0,1fr) 340px}.view{margin:9px}aside{padding:9px}}
 @media(max-width:720px){.app{height:auto;min-height:100dvh}.main{grid-template-columns:1fr}.view{height:56vh;margin:9px}aside{border-left:0;border-top:1px solid var(--line);max-height:none;overflow:visible}.toolbar-badge{display:none}.title-stack{gap:7px}#themePicker{width:74px}}
