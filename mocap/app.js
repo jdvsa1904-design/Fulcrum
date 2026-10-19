@@ -331,13 +331,13 @@ function keysFor(clip) {
   if (clip === lib.jump) return KEYS_FOR.jump;
   if (clip === lib.take) return ['R'];
   const i = lib.actions.indexOf(clip);
-  if (i >= 0) return i === 0 ? ['E', String(i + 1)] : i < 9 ? [String(i + 1)] : [];
+  if (i >= 0) return [...(i < 10 ? [String((i + 1) % 10)] : []), ...(i === S.ctl?.selected ? ['E'] : ['Q'])];
   return [];
 }
 
 function clipMeta(c) {
   const len = (c.n / c.fps).toFixed(1) + ' s';
-  if (c.kind === 'walk' || c.kind === 'run') return `${c.speed.toFixed(2)} m/s · step cycle ${c.cycle.toFixed(2)} s`;
+  if (c.kind === 'walk' || c.kind === 'run') return `${c.speed.toFixed(2)} m/s · step cycle ${c.cycle.toFixed(2)} s` + (c.derived ? ` · from the video (${c.derived})` : c.procedural ? '' : ' · from the video');
   if (c.kind === 'idle') return c.procedural ? 'standing, breathing' : `${len} loop · plays when no key is held`;
   if (c.kind === 'jump') return c.procedural ? 'made-up jump' : `${len} · ${((c.height ?? 0) * 100).toFixed(0)} cm off the floor`;
   if (c.kind === 'take') return `${len} · the whole video, moving through space`;
@@ -364,11 +364,11 @@ function renderClips() {
     li.querySelector('.keyset').innerHTML = keys.map(k => k === '+' ? '+' : `<kbd>${k}</kbd>`).join('') || (c === lib.idle ? '<span class="meta">no key</span>' : '');
     li.querySelector('.meta').textContent = clipMeta(c) + (used ? '' : ' · not in use');
     const act = li.querySelector('.act');
-    if (!used && (c.kind === 'walk' || c.kind === 'run' || c.kind === 'idle')) {
+    if (c !== lib[c.kind] && (c.kind === 'walk' || c.kind === 'run' || c.kind === 'idle')) {
       const b = document.createElement('button');
       b.className = 'btn small';
       b.textContent = 'Use this ' + c.kind;
-      b.addEventListener('click', e => { e.stopPropagation(); lib[c.kind] = c; S.ctl = createController(lib); renderClips(); renderLegend(); });
+      b.addEventListener('click', e => { e.stopPropagation(); const i = lib.actions.indexOf(c); if (i >= 0) lib.actions[i] = lib[c.kind].derived ? lib[c.kind].source ?? c : lib[c.kind]; if (lib.actions[i] === c || lib[c.kind].procedural) lib.actions.splice(i, 1); lib[c.kind] = c; S.ctl = createController(lib); renderClips(); renderLegend(); });
       act.appendChild(b);
     }
     li.addEventListener('click', () => {
@@ -382,10 +382,11 @@ function renderClips() {
 }
 
 function renderLegend() {
-  const lib = S.result.library, from = c => c.procedural ? 'made up' : 'from the video';
+  const lib = S.result.library, from = c => c.procedural ? 'made up' : c.derived ? `from the video (${c.derived})` : 'from the video', sel = lib.actions[S.ctl?.selected ?? 0];
   const rows = [
     [['W', 'A', 'S', 'D'], `walk (${from(lib.walk)})`], [['Shift'], `run (${from(lib.run)})`], [['Alt'], 'slow walk'], [['Space'], `jump (${from(lib.jump)})`], [['F'], 'full screen'],
-    ...lib.actions.slice(0, 9).map((a, i) => [i === 0 ? ['E', '1'] : [String(i + 1)], a.name]), [['R'], 'replay the whole video'], [['Esc'], 'stop / leave play'],
+    ...(lib.actions.length ? [[['Q', 'Shift+Q'], 'next / previous move'], [['E', 'Click'], `play selected move: ${sel?.name ?? ''}`]] : []),
+    ...lib.actions.map((a, i) => [i < 10 ? [String((i + 1) % 10)] : ['Q'], a.name + (a === sel ? ' (selected)' : '')]), [['R'], 'replay the whole video'], [['Esc'], 'stop / leave play'],
   ];
   $('legend').innerHTML = rows.map(([k, t]) => `<span>${k.map(x => `<kbd>${x}</kbd>`).join(' ')}</span><span>${t.replace(/</g, '&lt;')}</span>`).join('');
 }
@@ -406,7 +407,7 @@ function enterPlay() {
   $('playMode').textContent = 'Stop playing';
   document.activeElement?.blur?.();
   $('three').focus({ preventScroll: true });
-  toast('Use W A S D to move, Shift to run, Space to jump.');
+  toast('Use W A S D to move, Shift to run, Space to jump, Q to pick a move, E or click to play it.');
 }
 function exitPlay() {
   S.mode = 'review';
@@ -441,6 +442,9 @@ window.addEventListener('keyup', e => {
   if (S.mode === 'play' && !typing(e) && ['Space', 'Enter'].includes(e.code)) e.preventDefault();
 });
 window.addEventListener('blur', () => S.down.clear());
+let press = null;
+$('three').addEventListener('pointerdown', e => { press = S.mode === 'play' && e.button === 0 ? { x: e.clientX, y: e.clientY } : null; });
+$('three').addEventListener('pointerup', e => { if (press && S.mode === 'play' && Math.hypot(e.clientX - press.x, e.clientY - press.y) < 5) S.hit.add('Click'); press = null; });
 
 function pause() { S.playing = false; video.pause(); $('playBtn').textContent = '▶'; }
 function togglePlay() {
@@ -584,11 +588,12 @@ function tick(now) {
     const input = inputFromKeys(S.down, S.hit);
     S.hit.clear();
     input.camYaw = viewer.cameraYaw();
-    const out = stepController(S.ctl, input, dt);
+    const prevSel = S.ctl.selected, out = stepController(S.ctl, input, dt);
+    if (S.ctl.selected !== prevSel) { renderLegend(); renderClips(); hudTimer = 1; }
     applyPose(out.root, out.rot);
     if ((hudTimer += dt) > 0.15) {
       hudTimer = 0;
-      $('hud').textContent = out.state === 'action' ? `${out.action}` : out.state === 'jump' ? 'jump' : out.speed < 0.05 ? 'standing' : `${out.speed > S.ctl.walkSpeed * 1.15 ? 'running' : 'walking'} ${out.speed.toFixed(1)} m/s`;
+      $('hud').textContent = (out.state === 'action' ? `${out.action}` : out.state === 'jump' ? 'jump' : out.speed < 0.05 ? 'standing' : `${out.speed > S.ctl.walkSpeed * 1.15 ? 'running' : 'walking'} ${out.speed.toFixed(1)} m/s`) + (out.selected ? ` · selected: ${out.selected} (E / click)` : '');
     }
   } else if (res && S.preview) {
     const c = S.preview.clip, dur = c.n / c.fps;

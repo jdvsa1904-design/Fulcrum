@@ -25,7 +25,7 @@ The first start downloads the 3D engine and the pose tracker (about 80 MB) into 
 
 1. **Video.** Drag a video onto the left panel. Phone clips are fine. Keep the camera still if you can, and keep the whole body in view. You can trim the start and end.
 2. **Track.** Press *Track motion*. Fulcrum finds the body in every frame (Fast, Balanced or Best quality). The blue lines drawn over the video show the 3D result, so you can check it lines up. If the video has several people and it picked the wrong one, click the right person in the video. *Fine-tune* has the camera lens, smoothing, the person's height and foot locking.
-3. **Moves.** The moves found in the video are listed. Click one to preview it. If the video has no running, for example, Fulcrum makes up a run so the controls still work; those moves are marked *made up*.
+3. **Moves.** The moves found in the video are listed. Click one to preview it. Walking and running always come from the video if the person moves around in it at all. If the video has walking but no running, the run is the video's walk played faster (and a run with no walk is slowed down into a walk); these say *from the video (sped-up walk)* or *(slowed run)*. Only if the person never moves around does Fulcrum make up a walk and run so the controls still work; those are marked *made up*. Every other move found, including extra walks, runs and short moves, can be played from the keyboard or mouse.
 4. **Play.** Press *Start playing*.
 
 ## Keys in play mode
@@ -36,8 +36,9 @@ The first start downloads the 3D engine and the pose tracker (about 80 MB) into 
 | Shift (hold) | Run |
 | Alt (hold) | Slow walk |
 | Space | Jump |
-| E | Play the first extra move |
-| 1 to 9 | Play extra move 1 to 9 |
+| Q | Pick the next move (Shift+Q picks the previous one). The picked move is shown at the top of the screen and in the key list |
+| E or left click | Play the picked move (a click only counts if you don't drag) |
+| 1 to 9, 0 | Play move 1 to 9, and 0 plays move 10 |
 | R | Replay the whole video's motion from where the character stands |
 | F | Full screen |
 | Mouse drag / wheel | Look around / zoom |

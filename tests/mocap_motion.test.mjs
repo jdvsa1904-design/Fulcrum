@@ -141,6 +141,18 @@ test('controller: actions play with root motion, R replays the take, keys map to
   const keys = inputFromKeys(new Set(['KeyW', 'ShiftLeft']), new Set(['Space', 'Digit3']));
   assert.ok(keys.forward && keys.run && keys.jump && !keys.back);
   assert.equal(keys.slot, 2);
+  assert.equal(inputFromKeys(new Set(), new Set(['Digit0'])).slot, 9);
+  assert.equal(inputFromKeys(new Set(), new Set(['KeyQ'])).select, 1);
+  assert.equal(inputFromKeys(new Set(['ShiftLeft']), new Set(['KeyQ'])).select, -1);
+  assert.ok(inputFromKeys(new Set(), new Set(['Click'])).click);
+  const c2 = createController({ ...L, actions: [L.take, L.walk] });
+  stepController(c2, { select: 1 }, 1 / 30);
+  assert.equal(c2.selected, 1);
+  stepController(c2, { select: -1 }, 1 / 30); stepController(c2, { select: -1 }, 1 / 30);
+  assert.equal(c2.selected, 1, 'selection wraps');
+  stepController(c2, { click: true }, 1 / 30);
+  assert.equal(c2.state, 'action');
+  assert.equal(c2.action.clip, L.walk);
   const s = sampleClip(walk, walk.cycle * 0.25);
   assert.ok(s.rot.every(Number.isFinite));
 });

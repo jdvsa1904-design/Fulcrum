@@ -168,7 +168,7 @@ function closeGaps(mask, gap) {
 }
 
 export function segmentTake(take, fps, o = {}) {
-  const v = rootVelocity(take, fps, o.velocityFc ?? 1), n = take.n, minLen = Math.round(0.4 * fps);
+  const v = rootVelocity(take, fps, o.velocityFc ?? 1), n = take.n, minLen = Math.round((o.minSegSec ?? 0.3) * fps);
   let moving = Array.from(v.speed, s => s > (o.moveSpeed ?? 0.35) ? 1 : 0);
   moving = closeGaps(moving, Math.round(0.3 * fps));
   const still = closeGaps(moving.map(x => 1 - x), Math.round(0.3 * fps));
@@ -281,6 +281,20 @@ export function buildClips(skel, take, fps, plants, o = {}) {
       }
     }
   }
+  if (!clips.some(c => c.kind === 'walk' || c.kind === 'run')) {
+    let best = null;
+    for (const s of segments) {
+      if (s.kind !== 'move' || (s.b - s.a + 1) / fps < 0.5) continue;
+      const lp = findLoop(feat, s.a, s.b, fps, { minSec: 0.4, maxSec: 2.6 });
+      if (!lp || lp.quality > (o.looseLoopQuality ?? 3) || (best && lp.quality >= best.lp.quality)) continue;
+      const clip = makeLoopClip(skel, take, fps, lp.start, lp.len, plants, { yaw }), cls = classifyLoop(skel, clip);
+      if (clip.direction === 'forward' && cls.kind !== 'idle') best = { clip, cls, lp, s };
+    }
+    if (best) {
+      add(best.clip, { kind: best.cls.kind, flight: best.cls.flight, quality: best.lp.quality, segment: best.s, loose: true, name: best.cls.kind === 'run' ? 'Run' : 'Walk' });
+      used.push(best.s);
+    }
+  }
   const jumps = findJumps(skel, take, TW, fps, o);
   for (const j of jumps) {
     const a = Math.max(0, j.a - Math.round(0.4 * fps)), b = Math.min(take.n - 1, j.b + Math.round(0.4 * fps));
@@ -289,7 +303,7 @@ export function buildClips(skel, take, fps, plants, o = {}) {
   for (const s of segments) {
     if (used.includes(s) || jumps.some(j => j.a <= s.b && j.b >= s.a)) continue;
     const dur = (s.b - s.a + 1) / fps, energy = motionEnergy(take, TW, s.a, s.b, fps);
-    if (dur < 0.6 || (s.kind === 'still' && energy < (o.idleEnergy ?? 0.35))) continue;
+    if (dur < (o.minActionSec ?? 0.3) || (s.kind === 'still' && energy < (o.idleEnergy ?? 0.35))) continue;
     const a = Math.max(0, s.a - Math.round(0.15 * fps)), b = Math.min(take.n - 1, s.b + Math.round(0.15 * fps));
     add(oneShotClip(skel, take, fps, a, b, { yaw }), { kind: 'action', name: 'Move ' + (clips.filter(c => c.kind === 'action').length + 1), segment: s, energy });
   }
@@ -299,7 +313,12 @@ export function buildClips(skel, take, fps, plants, o = {}) {
 
 export function pickLibrary(clips) {
   const best = kind => clips.filter(c => c.kind === kind).sort((x, y) => (x.quality ?? 1) - (y.quality ?? 1) || (y.segment.b - y.segment.a) - (x.segment.b - x.segment.a))[0] ?? null;
-  return { idle: best('idle'), walk: best('walk'), run: best('run'), jump: clips.find(c => c.kind === 'jump') ?? null, actions: clips.filter(c => c.kind === 'action'), take: clips.find(c => c.kind === 'take') ?? null };
+  const lib = { idle: best('idle'), walk: best('walk'), run: best('run'), jump: clips.find(c => c.kind === 'jump') ?? null, take: clips.find(c => c.kind === 'take') ?? null };
+  const chosen = [lib.idle, lib.walk, lib.run, lib.jump, lib.take];
+  lib.actions = [...clips.filter(c => c.kind === 'action'), ...clips.filter(c => c.kind !== 'action' && c.kind !== 'take' && !chosen.includes(c))];
+  const count = {};
+  for (const c of lib.actions) if (c.kind !== 'action' && !/ \d+$/.test(c.name)) c.name = `${c.name} ${(count[c.kind] = (count[c.kind] ?? 1) + 1)}`;
+  return lib;
 }
 
 export function standingFrame(skel, take, fps, o = {}) {

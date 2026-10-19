@@ -3,8 +3,8 @@ import { NB, getQ, setQ } from './skeleton.js';
 
 export const KEYS = Object.freeze({
   forward: ['KeyW', 'ArrowUp'], back: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
-  run: ['ShiftLeft', 'ShiftRight'], walk: ['AltLeft', 'AltRight'], jump: ['Space'], action: ['KeyE'], replay: ['KeyR'], stop: ['Escape'],
-  slots: ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'],
+  run: ['ShiftLeft', 'ShiftRight'], walk: ['AltLeft', 'AltRight'], jump: ['Space'], action: ['KeyE'], select: ['KeyQ'], replay: ['KeyR'], stop: ['Escape'],
+  slots: ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9', 'Digit0'],
 });
 
 export function sampleClip(clip, t, out = { root: [0, 0, 0], rot: new Float64Array(NB * 4) }) {
@@ -42,7 +42,7 @@ export function createController(library, o = {}) {
   const walkSpeed = clamp(walk?.speed || 1.3, 0.5, 2.4), runSpeed = clamp(run?.speed || 3.3, walkSpeed * 1.3, 8);
   return {
     lib: library, walkSpeed, runSpeed, pos: [0, 0, 0], yaw: o.yaw ?? 0, speed: 0, phase: 0, idleT: 0, yawRate: 0, lean: 0,
-    state: 'move', jump: null, action: null, time: 0, lastPose: null, slowWalk: o.slowWalk ?? 0.55,
+    state: 'move', jump: null, action: null, selected: 0, time: 0, lastPose: null, slowWalk: o.slowWalk ?? 0.55,
     turnWalk: o.turnWalk ?? 7, turnRun: o.turnRun ?? 4.5, accel: o.accel ?? 4, decel: o.decel ?? 6,
   };
 }
@@ -82,7 +82,8 @@ function placePose(pose, pos, yaw, lean = 0) {
 
 function startAction(ctl, clip, kind) {
   if (!clip) return;
-  ctl.action = { clip, t: 0, kind, startPos: ctl.pos.slice(), startYaw: ctl.yaw, from: ctl.lastPose, dur: (clip.n - 1) / clip.fps };
+  const dur = clip.loop ? clip.cycle * Math.max(1, Math.ceil(1.5 / clip.cycle)) : (clip.n - 1) / clip.fps;
+  ctl.action = { clip, t: 0, kind, startPos: ctl.pos.slice(), startYaw: ctl.yaw, from: ctl.lastPose, dur };
   ctl.state = 'action';
   ctl.speed = 0;
 }
@@ -92,8 +93,10 @@ export function stepController(ctl, input = {}, dt = 1 / 60) {
   ctl.time += dt;
   const lib = ctl.lib;
   if (input.stop && ctl.state === 'action') { ctl.state = 'move'; ctl.action = null; }
-  if (input.slot != null && lib.actions?.[input.slot]) startAction(ctl, lib.actions[input.slot], 'action');
-  else if (input.action && (lib.actions?.[0] || lib.take)) startAction(ctl, lib.actions?.[0] ?? lib.take, 'action');
+  const na = lib.actions?.length ?? 0;
+  if (input.select && na) ctl.selected = (((ctl.selected + input.select) % na) + na) % na;
+  if (input.slot != null && lib.actions?.[input.slot]) { ctl.selected = input.slot; startAction(ctl, lib.actions[input.slot], 'action'); }
+  else if ((input.action || input.click) && (lib.actions?.[ctl.selected] || lib.take)) startAction(ctl, lib.actions?.[ctl.selected] ?? lib.take, 'action');
   else if (input.replay && lib.take) startAction(ctl, lib.take, 'take');
   const intent = moveIntent(input);
   let result;
@@ -159,7 +162,7 @@ export function stepController(ctl, input = {}, dt = 1 / 60) {
     }
   }
   ctl.lastPose = { root: result.root.slice(), rot: Float64Array.from(result.rot) };
-  return { ...result, state: ctl.state, speed: ctl.speed, yaw: ctl.yaw, pos: ctl.pos.slice(), phase: ctl.phase, action: ctl.action?.clip?.name ?? null };
+  return { ...result, state: ctl.state, speed: ctl.speed, yaw: ctl.yaw, pos: ctl.pos.slice(), phase: ctl.phase, action: ctl.action?.clip?.name ?? null, selected: lib.actions?.[ctl.selected]?.name ?? null };
 }
 
 function mixWorld(a, b, t) {
@@ -175,7 +178,7 @@ export function inputFromKeys(down, pressed = new Set()) {
   return {
     forward: has(KEYS.forward), back: has(KEYS.back), left: has(KEYS.left), right: has(KEYS.right),
     run: has(KEYS.run), walk: has(KEYS.walk), jump: hit(KEYS.jump), action: hit(KEYS.action), replay: hit(KEYS.replay), stop: hit(KEYS.stop),
-    slot: slot >= 0 ? slot : null,
+    slot: slot >= 0 ? slot : null, select: hit(KEYS.select) ? (has(KEYS.run) ? -1 : 1) : 0, click: pressed.has('Click'),
   };
 }
 
@@ -183,7 +186,7 @@ export function recordTake(ctl, script, fps = 30) {
   const frames = [];
   for (const step of script) {
     const n = Math.round(step.seconds * fps);
-    for (let i = 0; i < n; i++) frames.push(stepController(ctl, { ...step.input, jump: step.input.jump && i === 0, action: step.input.action && i === 0, replay: step.input.replay && i === 0, slot: i === 0 ? step.input.slot ?? null : null }, 1 / fps));
+    for (let i = 0; i < n; i++) frames.push(stepController(ctl, { ...step.input, jump: step.input.jump && i === 0, action: step.input.action && i === 0, replay: step.input.replay && i === 0, slot: i === 0 ? step.input.slot ?? null : null, select: i === 0 ? step.input.select ?? 0 : 0, click: step.input.click && i === 0 }, 1 / fps));
   }
   const n = frames.length, root = new Float64Array(n * 3), rot = new Float64Array(n * NB * 4);
   frames.forEach((f, i) => {

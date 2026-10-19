@@ -46,7 +46,9 @@ test('pipeline: a noisy video of idle, walk, idle becomes a measured walk loop, 
   near(walk.speed, lib.walk.speed, 0.08, 'walk speed');
   near(walk.cycle, lib.walk.cycle, 2 / 30, 'walk cycle');
   assert.ok(res.library.idle && !res.library.idle.procedural, 'idle comes from the video');
-  assert.ok(res.library.run.procedural && res.library.jump.procedural, 'missing moves are filled in');
+  assert.ok(!res.library.run.procedural && res.library.run.derived === 'sped-up walk', 'the run is the captured walk sped up');
+  assert.ok(res.library.run.speed > walk.speed * 1.5 && Math.abs(res.library.run.speed * res.library.run.cycle - walk.speed * walk.cycle) < 1e-6, 'retimed consistently');
+  assert.ok(res.library.jump.procedural, 'missing jump is filled in');
   assert.ok(res.library.take.n === res.n);
   for (const c of res.clips) assert.ok(c.rot.every(Number.isFinite) && c.root.every(Number.isFinite), c.name);
   assert.ok(res.report.skate < 0.01, `foot skate ${res.report.skate}`);

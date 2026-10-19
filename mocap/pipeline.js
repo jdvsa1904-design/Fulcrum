@@ -59,6 +59,9 @@ export function completeLibrary(skel, take, fps, clips, o = {}) {
   }
   const rootY = stand?.still ? getV(take.root, stand.frame)[1] : skel.rest[0][1] - 0.005;
   if (!lib.idle) lib.idle = { ...idleClip(skel, { fps, local: base, root: [0, rootY, 0] }), name: 'Idle' };
+  const retime = (c, kind, speed, derived) => { const f = speed / c.speed; return { ...c, kind, name: kind === 'run' ? 'Run' : 'Walk', fps: c.fps * f, cycle: c.cycle / f, speed, derived, source: c }; };
+  if (!lib.walk && lib.run) lib.walk = retime(lib.run, 'walk', Math.min(1.4, lib.run.speed * 0.45), 'slowed run');
+  if (!lib.run && lib.walk) lib.run = retime(lib.walk, 'run', Math.max(defaultSpeed(skel, 'run'), lib.walk.speed * 2.2), 'sped-up walk');
   if (!lib.walk) lib.walk = { ...gaitClip(skel, { kind: 'walk', fps, speed: lib.run ? Math.min(1.4, lib.run.speed * 0.45) : defaultSpeed(skel, 'walk') }), name: 'Walk' };
   if (!lib.run) lib.run = { ...gaitClip(skel, { kind: 'run', fps, speed: Math.max(defaultSpeed(skel, 'run'), lib.walk.speed * 2.2) }), name: 'Run' };
   if (!lib.jump) lib.jump = { ...jumpClip(skel, { fps, local: base, root: [0, rootY, 0] }), name: 'Jump' };
