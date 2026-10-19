@@ -1,12 +1,40 @@
-# Fulcrum handoff — 2026-10-15
+# Fulcrum handoff
 
-## Goal
+## Fulcrum Mocap: video to rigged 3D to WASD (2026-10-19)
+- **Run:** `python server.py 8790`, then http://localhost:8790 is the mocap app. The clean-up studio moved unchanged to http://localhost:8790/studio.html; the MCP bridge needs that page open.
+- **Pipeline (`mocap/`):**
+  - MediaPipe Pose Landmarker in the browser (tasks-vision 0.10.21, VIDEO mode, 2 poses). Frames are seeked one by one; the next frame decodes while the current one is analysed, and the faster of GPU and CPU is kept after 3 frames.
+  - Person pick: duplicate detections dropped (box IoU > 0.5), score = size x visibility x (1 + travel), click a person to override. Ends where the box touches the frame border are trimmed.
+  - Root: least-squares camera-space translation from 2D + 3D landmarks with an assumed lens (default 60 degrees, adjustable); landmarks blended halfway toward the 2D rays.
+  - Clean: despike (`peakRemovalVec`) on limbs and root, then Butterworth low-pass with linear padding (6 Hz limbs, 4 Hz root, 1.5 Hz depth).
+  - Floor: plane fit to slow, low foot points with a ridge prior toward the mean torso direction.
+  - Skeleton: 22 Mixamo-named bones, T-pose facing +Z, Y up, metres, rest rotations identity, proportions measured from the landmarks.
+  - Solve: basis-frame rotations; elbows and knees use the hinge axis with a minimal-twist fallback near straight; knees never bend backwards more than 5 degrees; half of the wrist twist goes to the forearm.
+  - Ground and feet: grounding from contact frames (lower-foot percentile when contacts are rare), `wire/plants.js` plants trimmed to where the foot stays within 7 cm. The body is then shifted up or down (smoothly) so planted feet touch the floor, and `ik.js` two-bone locks pin each planted foot at its median contact point, with a soft reach only in the last 0.7 percent of leg length. The pelvis drop is off by default (`maxDrop`): any drop bends near-straight legs a lot.
+  - Moves: still/move segments split into walk and run bands; loops found by pose-feature autocorrelation, ramp-closed, made in place facing +Z, started at a left foot plant; jumps need both feet up and a hip rise of 8 cm; other segments become actions; the whole take is a replay clip. Missing idle, walk, run or jump are generated (`gait.js`) and flagged as made up.
+- **Controller (`mocap/controller.js`):** camera-relative WASD, Shift run, Alt slow walk, Space jump, E and 1-9 actions, R replays the whole take with its root motion, F full screen, Esc. Idle, walk and run blend by speed with a shared phase; playback rate follows stride length so feet do not slide.
+- **Exports:** GLB (mannequin, or the loaded GLB/glTF/FBX character through `wire/hikretarget.js`, every move as a clip), FBX through Blender (`tools/glb_to_fbx.py`, `POST /api/glb-to-fbx`; same export settings as `frames_to_fbx.py`, all actions as separate takes), BVH (Mixamo names, cm, ZXY), project JSON (tracking results, no video).
+- **Server:** `tools/fetch_vendor.py` puts three.js 0.169.0, tasks-vision and the three pose models in `vendor/` (gitignored, background download on start); missing vendor files redirect to the CDN. `POST /api/transcode` converts videos the browser cannot play (needs ffmpeg). `GET /api/mocap/status`.
+- **Measured:**
+  - Node tests: `tests/mocap_core`, `mocap_motion`, `mocap_pipeline` (21 tests, all passing). The pipeline tests film a synthetic person with a virtual camera plus tracker-like noise: mean joint error about 3.5 cm, walk speed within 0.03 m/s, loop length within one frame, camera height within 2 cm, skate after locking under 1 cm.
+  - Sports2D `Demo/demo.mp4` (VP9, 1768x994, 230 frames; walking woman, a man on a box, a passer-by): picks the woman, frames 59-195 after border trim, height 1.60 m, walk loop 1.16 m/s with a 1.23 s cycle, no false jump; idle, run and jump are made up. The blue reprojection over the video lines up with MediaPipe's 2D points.
+  - Foot locking on that clip: stance knee bend 19 degrees median (16 before locking; 27 to 32 with the old pelvis drop), planted feet within 3 mm of the floor for 90 percent of frames, at most 0.6 cm slide.
+  - In this container (no GPU) tracking took 59 s for the 230 frames on CPU.
+  - Exports: the GLB reloads in three.js (1 skinned mesh, 22 bones, 5 clips); the BVH parses in three's BVHLoader; the FBX made through Blender 5.2.2 re-imports with 22 bones and all 5 actions at the right lengths.
+- **Gaps:**
+  - Depth comes from one camera and the lens guess; a wrong lens stretches walking toward or away from the camera.
+  - The spine only twists (pelvis and chest share the torso axis); fingers and toes are not tracked.
+  - The made-up jump is a standing jump; from a run it is blended in.
+  - Loading third-party characters goes through the HumanIK retargeter; only Fulcrum's own GLB was tested here.
+  - Phones are out of scope (user decision): it is a keyboard and mouse app.
+
+## Studio goal (2026-10-15)
 Fulcrum (C:\Projects\Fulcrum) replaces Cascadeur. It fixes the FRT drill capture (sprint → plant → slide → kneel → rise → stop/shoulder) on the Checkpoint soldier and exports FBX to Unreal. The current task was to reverse-engineer Maya with AdvancedSkeleton, 3ds Max and MotionBuilder using Ghidra and REA, then port the useful math into Fulcrum.
 
 ## App state
-- Run it with `python server.py 8790` (launch config "fulcrum" in C:\.claude\launch.json), then open http://localhost:8790.
+- Run it with `python server.py 8790` (launch config "fulcrum" in C:\.claude\launch.json), then open http://localhost:8790/studio.html.
 - Code:
-  - app.js and index.html are the UI and the pipeline.
+  - app.js and studio.html are the UI and the pipeline.
   - ballistic.js and fulcrum.js hold the Cascadeur-derived physics.
   - filters.js, ik.js, contacts.js, stitch.js and hik.js are the ported solvers.
   - tastebridge.js connects Fulcrum to LocomotionTaste.
@@ -148,7 +176,7 @@ e_work\max	ests\csmsweep.ms).
 
 ## Fulcrum MCP (2026-10-16)
 - **Server:** mcp/fulcrum_mcp.py, registered at user scope as `fulcrum`. It goes through server.py /api/bridge to the open page; app.js polls /api/bridge/next.
-- **Needs:** `python server.py 8790` running and http://localhost:8790 open in a browser.
+- **Needs:** `python server.py 8790` running and http://localhost:8790/studio.html open in a browser.
 - **Tools:** status, load_frt, open_project, save_project, add_fix, set_fixes, remove_fix, cut, insert, set_locks, set_pins, set_layer, select, judge, pose, screenshot (side, front, back, top, three_quarter, relative to the character's facing), export_fbx, eval_js.
 
 ## Tools and work dirs

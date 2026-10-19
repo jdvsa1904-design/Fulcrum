@@ -191,8 +191,8 @@ export function refinePlants(skel, TW, plants, o = {}) {
   return out;
 }
 
-export function softReach(hip, goal, L, soft = 0.97) {
-  const d = sub(goal, hip), l = len(d), a = soft * L, b = 0.9995 * L;
+export function softReach(hip, goal, L, soft = 0.993) {
+  const d = sub(goal, hip), l = len(d), a = soft * L, b = 0.9998 * L;
   if (l <= a || l < 1e-9) return goal;
   return add(hip, scale(d, (a + (b - a) * (1 - Math.exp(-(l - a) / (b - a)))) / l));
 }
@@ -203,7 +203,9 @@ export function lockFeet(skel, take, fps, plants, o = {}) {
   if (o.refine !== false) plants = refinePlants(skel, TW, plants, o);
   for (const p of plants) {
     if (p.sliding && !o.lockSliding) continue;
-    const S = SIDES[p.side], pivotBone = p.point === 'ball' ? S.toe : S.foot, pivot = getV(worldAt(TW, p.anchor).pos, pivotBone);
+    const S = SIDES[p.side], pivotBone = p.point === 'ball' ? S.toe : S.foot, xs = [], zs = [];
+    for (let f = p.a; f <= p.b; f++) { const c = getV(worldAt(TW, f).pos, pivotBone); xs.push(c[0]); zs.push(c[2]); }
+    const pivot = [median(xs), 0, median(zs)];
     for (let f = Math.max(0, p.a - blend); f <= Math.min(n - 1, p.b + blend); f++) {
       const w = f < p.a ? smoothstep(p.a - blend - 1, p.a, f) : f > p.b ? 1 - smoothstep(p.b, p.b + blend + 1, f) : 1;
       if (plan[p.side][f] && plan[p.side][f].w >= w) continue;
@@ -211,7 +213,7 @@ export function lockFeet(skel, take, fps, plants, o = {}) {
     }
   }
   const goals = { L: new Array(n).fill(null), R: new Array(n).fill(null) }, drop = new Float64Array(n);
-  const Lleg = skel.m.thigh + skel.m.shin, Lmax = Lleg * (o.reach ?? 0.995);
+  const Lleg = skel.m.thigh + skel.m.shin, Lmax = Lleg * (o.reach ?? 0.996), vert = new Float64Array(n), vw = new Float64Array(n);
   for (let f = 0; f < n; f++) {
     const W = worldAt(TW, f);
     for (const side of ['L', 'R']) {
@@ -223,18 +225,40 @@ export function lockFeet(skel, take, fps, plants, o = {}) {
       const moved = v => qrot(fq, qrot(qconj(fq0), sub(v, ank)));
       const pivotOff = moved(getV(W.pos, pl.pivotBone)), lowOff = Math.min(...['heel', 'ball', 'toe'].map(k => moved(sole[k])[1]));
       const lockedAnkle = [pl.pivot[0] - pivotOff[0], -lowOff, pl.pivot[2] - pivotOff[2]];
-      const goal = vlerp(ank, lockedAnkle, pl.w);
-      goals[side][f] = { goal, fq, w: pl.w };
-      const hip = getV(W.pos, S.up), d = sub(goal, hip), h2 = d[0] * d[0] + d[2] * d[2];
+      goals[side][f] = { ank, lockedAnkle, fq, w: pl.w };
+      vert[f] += pl.w * (lockedAnkle[1] - ank[1]);
+      vw[f] += pl.w;
+    }
+  }
+  const shift = new Float64Array(n), known = new Uint8Array(n);
+  if (o.lift !== false) {
+    for (let f = 0; f < n; f++) if (vw[f] > 0.5) { shift[f] = vert[f] / vw[f]; known[f] = 1; }
+    let prev = -1;
+    for (let f = 0; f <= n; f++) {
+      if (f < n && !known[f]) continue;
+      for (let j = prev + 1; j < f; j++) shift[j] = prev < 0 ? (f < n ? shift[f] : 0) : f >= n ? shift[prev] : shift[prev] + (shift[f] - shift[prev]) * (j - prev) / (f - prev);
+      prev = f;
+    }
+    const sm0 = lowpass(shift, fps, o.fcLift ?? 3);
+    for (let f = 0; f < n; f++) { shift[f] = sm0[f]; take.root[f * 3 + 1] += sm0[f]; }
+  }
+  for (let f = 0; f < n; f++) {
+    const W = worldAt(TW, f);
+    for (const side of ['L', 'R']) {
+      const g = goals[side][f];
+      if (!g) continue;
+      const ank = [g.ank[0], g.ank[1] + shift[f], g.ank[2]], goal = vlerp(ank, g.lockedAnkle, g.w);
+      goals[side][f] = { goal, fq: g.fq, w: g.w };
+      const hip0 = getV(W.pos, SIDES[side].up), hip = [hip0[0], hip0[1] + shift[f], hip0[2]], d = sub(goal, hip), h2 = d[0] * d[0] + d[2] * d[2];
       const need = h2 < Lmax * Lmax ? hip[1] - goal[1] - Math.sqrt(Lmax * Lmax - h2) : hip[1] - goal[1];
       drop[f] = Math.max(drop[f], need);
     }
   }
   const held = new Float64Array(n);
   for (let f = 0; f < n; f++) { let m = 0; for (let k = Math.max(0, f - blend); k <= Math.min(n - 1, f + blend); k++) m = Math.max(m, drop[k]); held[f] = m; }
-  const sm = lowpass(held, fps, o.fcDrop ?? 3);
+  const sm = lowpass(held, fps, o.fcDrop ?? 3), cap = o.maxDrop ?? 0;
   let maxDrop = 0;
-  for (let f = 0; f < n; f++) { const d = Math.max(0, sm[f]); take.root[f * 3 + 1] -= d; maxDrop = Math.max(maxDrop, d); }
+  for (let f = 0; f < n; f++) { const d = Math.min(cap, Math.max(0, sm[f])); take.root[f * 3 + 1] -= d; maxDrop = Math.max(maxDrop, d); }
   const prevBend = { L: null, R: null };
   let locked = 0, lifted = 0;
   for (let f = 0; f < n; f++) {
@@ -250,7 +274,7 @@ export function lockFeet(skel, take, fps, plants, o = {}) {
       const hip = getV(W.pos, S.up), knee = getV(W.pos, S.knee), ank = getV(W.pos, S.foot), axis = norm(sub(ank, hip));
       const bendV = sub(knee, mid(hip, ank)), bendP = sub(bendV, scale(axis, dot(bendV, axis)));
       const pole = len(bendP) > 0.01 ? bendP : prevBend[side] ?? qrot(g.fq, [0, 0, 1]);
-      const r = twoBoneIK(hip, knee, ank, softReach(hip, g.goal, Lleg, o.soft ?? 0.97), { pole, prevBend: prevBend[side], preferredBend: qrot(g.fq, [0, 0, 1]) });
+      const r = twoBoneIK(hip, knee, ank, softReach(hip, g.goal, Lleg, o.soft ?? 0.993), { pole, prevBend: prevBend[side], preferredBend: qrot(g.fq, [0, 0, 1]) });
       prevBend[side] = r.bend;
       const qU = qmul(r.rotRoot, getQ(W.q, S.up)), qK = qmul(r.rotMid, qmul(r.rotRoot, getQ(W.q, S.knee)));
       setQ(local, S.up, qmul(qconj(getQ(W.q, B.Hips)), qU));
@@ -259,7 +283,7 @@ export function lockFeet(skel, take, fps, plants, o = {}) {
       if (goals[side][f]) locked++;
     }
   }
-  return { lockedFrames: locked, liftedFrames: lifted, maxDrop, plants };
+  return { lockedFrames: locked, liftedFrames: lifted, maxDrop, maxShift: Math.max(0, ...Array.from(shift, Math.abs)), plants };
 }
 
 export function footSkate(skel, take, fps, plants) {

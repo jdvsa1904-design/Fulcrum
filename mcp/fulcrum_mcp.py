@@ -19,7 +19,7 @@ def call(cmd, timeout=300, **args):
         with urllib.request.urlopen(req, timeout=timeout + 10) as r:
             res = json.loads(r.read().decode())
     except Exception as e:
-        raise RuntimeError(f"Fulcrum server not reachable at {BASE} ({e}). Start it with: python C:/Projects/Fulcrum/server.py 8790, then open {BASE} in a browser.")
+        raise RuntimeError(f"Fulcrum server not reachable at {BASE} ({e}). Start it with: python C:/Projects/Fulcrum/server.py 8790, then open {BASE}/studio.html in a browser.")
     if not res.get("ok"):
         raise RuntimeError(res.get("error", "unknown error"))
     return res["result"]

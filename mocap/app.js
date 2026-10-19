@@ -101,7 +101,7 @@ async function serverConvert(file) {
 function resetResult() {
   S.capture = null; S.result = null; S.preview = null; S.settings.person = null;
   $('clipList').innerHTML = '';
-  for (const id of ['toMoves', 'toPlay', 'playMode', 'glbBtn', 'bvhBtn', 'saveBtn']) $(id).disabled = true;
+  for (const id of ['toMoves', 'toPlay', 'playMode', 'glbBtn', 'fbxBtn', 'bvhBtn', 'saveBtn']) $(id).disabled = true;
   $('trackInfo').textContent = '';
   status('trackStatus', '');
 }
@@ -268,7 +268,7 @@ function solve(first = false) {
     res.tracks.length > 1 ? 'Wrong person? Click them in the video.' : '',
   ].filter(Boolean).join('\n');
   $('videoPane').classList.toggle('pickable', res.tracks.length > 1 && !!S.video);
-  for (const id of ['toMoves', 'toPlay', 'playMode', 'glbBtn', 'bvhBtn', 'saveBtn']) $(id).disabled = false;
+  for (const id of ['toMoves', 'toPlay', 'playMode', 'glbBtn', 'fbxBtn', 'bvhBtn', 'saveBtn']) $(id).disabled = false;
   if (!prevSkel || prevSkel.dims.height !== res.skel.dims.height || first) useCharacter();
   S.ctl = createController(res.library);
   renderClips();
@@ -384,7 +384,7 @@ function renderClips() {
 function renderLegend() {
   const lib = S.result.library, from = c => c.procedural ? 'made up' : 'from the video';
   const rows = [
-    [['W', 'A', 'S', 'D'], `walk (${from(lib.walk)})`], [['Shift'], `run (${from(lib.run)})`], [['Alt'], 'slow walk'], [['Space'], `jump (${from(lib.jump)})`],
+    [['W', 'A', 'S', 'D'], `walk (${from(lib.walk)})`], [['Shift'], `run (${from(lib.run)})`], [['Alt'], 'slow walk'], [['Space'], `jump (${from(lib.jump)})`], [['F'], 'full screen'],
     ...lib.actions.slice(0, 9).map((a, i) => [i === 0 ? ['E', '1'] : [String(i + 1)], a.name]), [['R'], 'replay the whole video'], [['Esc'], 'stop / leave play'],
   ];
   $('legend').innerHTML = rows.map(([k, t]) => `<span>${k.map(x => `<kbd>${x}</kbd>`).join(' ')}</span><span>${t.replace(/</g, '&lt;')}</span>`).join('');
@@ -421,7 +421,12 @@ const typing = e => /^(INPUT|SELECT|TEXTAREA)$/.test(e.target?.tagName) && e.tar
 window.addEventListener('keydown', e => {
   if (typing(e)) return;
   if (S.mode === 'play') {
-    if (e.code === 'Escape' && !S.ctl?.action) { exitPlay(); return; }
+    if (e.code === 'Escape' && !S.ctl?.action) { if (document.fullscreenElement) document.exitFullscreen(); exitPlay(); return; }
+    if (e.code === 'KeyF' && !e.repeat) {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else $('viewPane').requestFullscreen?.().catch(() => {});
+      return;
+    }
     if (['Space', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'AltLeft', 'AltRight', 'Tab'].includes(e.code)) e.preventDefault();
     if (!e.repeat) S.hit.add(e.code);
     S.down.add(e.code);
@@ -615,17 +620,33 @@ function tick(now) {
 }
 requestAnimationFrame(tick);
 
+const exportClips = () => { const lib = S.result.library; return [lib.idle, lib.walk, lib.run, lib.jump, ...lib.actions, lib.take].filter((c, i, a) => c && a.indexOf(c) === i); };
 $('glbBtn').addEventListener('click', async () => {
   if (!S.result || !S.character) return;
   status('exportStatus', 'Building the GLB…');
   try {
-    const lib = S.result.library, clips = [lib.idle, lib.walk, lib.run, lib.jump, ...lib.actions, lib.take].filter((c, i, a) => c && a.indexOf(c) === i);
-    const blob = await exportGLB(S.character, clips);
+    const clips = exportClips(), blob = await exportGLB(S.character, clips);
     download(blob, baseName() + '.glb');
     status('exportStatus', `Saved ${baseName()}.glb with ${clips.length} animations (${(blob.size / 1e6).toFixed(1)} MB).`, 'ok');
   } catch (e) {
     console.error(e);
     status('exportStatus', 'GLB export failed: ' + e.message, 'bad');
+  }
+});
+$('fbxBtn').addEventListener('click', async () => {
+  if (!S.result || !S.character) return;
+  status('exportStatus', 'Building the FBX with Blender… this can take a minute.');
+  try {
+    const clips = exportClips(), blob = await exportGLB(S.character, clips);
+    const r = await fetch(`api/glb-to-fbx?name=${encodeURIComponent(baseName())}&fps=${fps()}`, { method: 'POST', body: blob });
+    const j = await r.json().catch(() => ({ ok: false, error: 'The Fulcrum server did not answer. Is server.py running?' }));
+    if (!j.ok) throw new Error(j.error || 'Conversion failed.');
+    const fbx = await (await fetch(j.fbx)).blob();
+    download(fbx, baseName() + '.fbx');
+    status('exportStatus', `Saved ${baseName()}.fbx with ${clips.length} animations. A copy is in ${j.path}.`, 'ok');
+  } catch (e) {
+    console.error(e);
+    status('exportStatus', 'FBX export failed: ' + e.message, 'bad');
   }
 });
 $('bvhBtn').addEventListener('click', () => {

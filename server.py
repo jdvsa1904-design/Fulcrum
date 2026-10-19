@@ -244,7 +244,7 @@ class Handler(SimpleHTTPRequestHandler):
                     return
             return super().do_GET()
         if route == "/api/mocap/status":
-            return self.send_json({"ffmpeg": bool(FFMPEG and FFPROBE), "vendor": fetch_vendor.status()})
+            return self.send_json({"ffmpeg": bool(FFMPEG and FFPROBE), "blender": BLENDER.is_file(), "vendor": fetch_vendor.status()})
         if self.path.split('?')[0] == "/api/bridge/next":
             client = self.path.split('client=', 1)[1] if 'client=' in self.path else None
             return self.send_json(bridge_next(20, client))
@@ -288,6 +288,23 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(n)
+        if self.path.startswith("/api/glb-to-fbx"):
+            if not BLENDER.is_file():
+                return self.send_json({"ok": False, "error": "FBX export needs Blender. Install it from blender.org (or set \"blender\" in %APPDATA%\\Fulcrum\\fulcrum.json), then restart Fulcrum. The .glb export works without it."}, 503)
+            q = parse_qs(urlsplit(self.path).query)
+            name = "".join(c if c.isalnum() or c in "-_" else "_" for c in Path((q.get("name") or ["motion"])[0]).stem)[:60] or "motion"
+            fps = (q.get("fps") or ["30"])[0]
+            EXPORTS.mkdir(parents=True, exist_ok=True)
+            glb, fbx = EXPORTS / f"{name}.glb", EXPORTS / f"{name}.fbx"
+            glb.write_bytes(raw)
+            cmd = [str(BLENDER), "-b", "--factory-startup", "-P", str(ROOT / "tools" / "glb_to_fbx.py"), "--", str(glb), str(fbx), str(fps)]
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                return self.send_json({"ok": False, "error": str(error)}, 500)
+            log = [l for l in (r.stdout + r.stderr).splitlines() if l.startswith("FULCRUM")]
+            ok = r.returncode == 0 and fbx.is_file()
+            return self.send_json({"ok": ok, "fbx": f"/exports/{fbx.name}" if ok else None, "path": str(fbx), "log": log or (r.stdout + r.stderr)[-3000:].splitlines(), "error": None if ok else "Blender could not convert the file."})
         if self.path.startswith("/api/transcode"):
             if not (FFMPEG and FFPROBE):
                 return self.send_json({"ok": False, "error": "This video format needs ffmpeg to convert it. Install ffmpeg (ffmpeg.org) and add it to PATH, or convert the video to MP4 (H.264) or WebM first."}, 503)

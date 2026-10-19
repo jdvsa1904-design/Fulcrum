@@ -99,6 +99,7 @@ details .field+.field{margin-top:8px}
 .app[data-mode="play"] .stage{grid-template-columns:1fr}
 .app[data-mode="play"] .video-pane{display:none}
 .app[data-mode="play"] .keys{display:flex}
+.view-pane:fullscreen{border-radius:0;border:0}
 .app[data-mode="play"]{grid-template-rows:56px minmax(0,1fr) 0}
 .app[data-mode="play"] .timeline{display:none}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:9px 14px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:9;max-width:calc(100% - 32px)}
