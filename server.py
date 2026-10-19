@@ -1,5 +1,7 @@
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -7,17 +9,72 @@ import time
 import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tools"))
 from fulcrum_config import load as load_config
+import fetch_vendor
 CONFIG = load_config()
 EXPORTS = CONFIG["exports"]
 IMPORTS = CONFIG["imports"]
 SAMPLES = CONFIG["samples"] or IMPORTS
 BLENDER = CONFIG["blender"] or Path("blender.exe")
 TASTE = CONFIG["taste"] or Path(r"C:\Projects\LocomotionTaste")
+WORK = ROOT / "work" / "mocap"
+FFMPEG = shutil.which("ffmpeg")
+FFPROBE = shutil.which("ffprobe")
+RATES = (23.976, 24.0, 25.0, 29.97, 30.0, 48.0, 50.0, 59.94, 60.0, 90.0, 100.0, 119.88, 120.0, 240.0)
+
+
+def ratio(text):
+    try:
+        a, b = str(text).split("/") if "/" in str(text) else (text, 1)
+        return float(a) / float(b) if float(b) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def probe_video(path):
+    if not FFPROBE:
+        return {}
+    r = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=codec_name,width,height,avg_frame_rate,r_frame_rate,nb_frames,duration:format=duration",
+                        "-of", "json", str(path)], capture_output=True, text=True, timeout=60)
+    try:
+        info = json.loads(r.stdout)
+    except ValueError:
+        return {}
+    st = (info.get("streams") or [{}])[0]
+    fps = ratio(st.get("avg_frame_rate")) or ratio(st.get("r_frame_rate"))
+    near = min(RATES, key=lambda x: abs(x - fps)) if fps else 0.0
+    fps = near if fps and abs(near - fps) < 0.02 * fps else round(fps, 3)
+    dur = ratio(st.get("duration")) or ratio((info.get("format") or {}).get("duration"))
+    frames = int(st.get("nb_frames") or 0) or (round(dur * fps) if dur and fps else 0)
+    return {"codec": st.get("codec_name"), "width": st.get("width"), "height": st.get("height"), "fps": fps, "duration": dur, "frames": frames}
+
+
+def transcode(raw, name):
+    WORK.mkdir(parents=True, exist_ok=True)
+    stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in Path(name).stem)[:40] or "video"
+    tag = hashlib.sha1(raw).hexdigest()[:10]
+    src = WORK / f"{stem}-{tag}{Path(name).suffix.lower() or '.mp4'}"
+    out = WORK / f"{stem}-{tag}.webm"
+    if not out.is_file():
+        src.write_bytes(raw)
+        info = probe_video(src)
+        fps = info.get("fps") or 30.0
+        scale = "scale='if(gt(iw,ih),min(1280,iw),-2)':'if(gt(iw,ih),-2,min(1280,ih))'"
+        cmd = [FFMPEG, "-y", "-v", "error", "-i", str(src), "-an", "-vf", scale, "-r", str(fps), "-c:v", "libvpx-vp9",
+               "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1", "-b:v", "0", "-crf", "32", "-pix_fmt", "yuv420p", str(out.with_suffix(".part.webm"))]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        if r.returncode != 0:
+            return {"ok": False, "error": (r.stderr or "ffmpeg failed")[-2000:]}
+        out.with_suffix(".part.webm").replace(out)
+        src.unlink(missing_ok=True)
+    info = probe_video(out)
+    return {"ok": True, "url": "/work/mocap/" + out.name, **info}
 
 
 def judge_phases(req):
@@ -123,7 +180,7 @@ BRIDGE = {"queue": [], "results": {}, "cv": threading.Condition(), "seen": 0.0, 
 
 def bridge_call(cmd, args, timeout):
     if time.time() - BRIDGE["seen"] > 30:
-        return {"ok": False, "error": "Fulcrum page is not open. Open http://localhost:8790 in a browser."}
+        return {"ok": False, "error": "Fulcrum studio page is not open. Open http://localhost:8790/studio.html in a browser."}
     job = {"id": uuid.uuid4().hex, "cmd": cmd, "args": args}
     with BRIDGE["cv"]:
         BRIDGE["queue"].append(job)
@@ -157,6 +214,11 @@ def bridge_next(wait, client=None):
 
 
 class Handler(SimpleHTTPRequestHandler):
+    extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css",
+                      ".html": "text/html", ".json": "application/json", ".wasm": "application/wasm", ".task": "application/octet-stream",
+                      ".glb": "model/gltf-binary", ".gltf": "model/gltf+json", ".webm": "video/webm", ".mp4": "video/mp4", ".bvh": "text/plain",
+                      ".fbx": "application/octet-stream", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg"}
+
     def __init__(self, *a, **k):
         super().__init__(*a, directory=str(ROOT), **k)
 
@@ -169,6 +231,20 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        route = urlsplit(self.path).path
+        if route.startswith("/vendor/"):
+            rel = unquote(route[len("/vendor/"):])
+            if ".." not in Path(rel).parts and not (fetch_vendor.VENDOR / rel).is_file():
+                url = fetch_vendor.cdn_url(rel)
+                if url:
+                    self.send_response(302)
+                    self.send_header("Location", url)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+            return super().do_GET()
+        if route == "/api/mocap/status":
+            return self.send_json({"ffmpeg": bool(FFMPEG and FFPROBE), "vendor": fetch_vendor.status()})
         if self.path.split('?')[0] == "/api/bridge/next":
             client = self.path.split('client=', 1)[1] if 'client=' in self.path else None
             return self.send_json(bridge_next(20, client))
@@ -212,6 +288,14 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(n)
+        if self.path.startswith("/api/transcode"):
+            if not (FFMPEG and FFPROBE):
+                return self.send_json({"ok": False, "error": "This video format needs ffmpeg to convert it. Install ffmpeg (ffmpeg.org) and add it to PATH, or convert the video to MP4 (H.264) or WebM first."}, 503)
+            name = (parse_qs(urlsplit(self.path).query).get("name") or ["video.mp4"])[0]
+            try:
+                return self.send_json(transcode(raw, name))
+            except (OSError, subprocess.TimeoutExpired) as error:
+                return self.send_json({"ok": False, "error": str(error)}, 500)
         if self.path == "/api/bridge/connect":
             req = json.loads(raw)
             with BRIDGE["cv"]:
@@ -297,5 +381,6 @@ if __name__ == "__main__":
         print(json.dumps(res))
         sys.exit(1 if res["verdict"] == "fail" else 0)
     port = int(sys.argv[1]) if len(sys.argv) > 1 else CONFIG["port"]
-    print(f"Fulcrum on http://localhost:{port}", flush=True)
+    fetch_vendor.ensure_background(log=lambda m: print("vendor:", m, flush=True))
+    print(f"Fulcrum on http://localhost:{port}  (studio: http://localhost:{port}/studio.html)", flush=True)
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
