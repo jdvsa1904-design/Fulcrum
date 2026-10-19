@@ -61,11 +61,24 @@ You can play the built-in mannequin or load your own character (GLB, glTF or FBX
 - If you know the person's height, type it in. It makes speeds and jump heights exact.
 - Videos the browser cannot play (some HEVC or AVI files) are converted automatically when ffmpeg is installed.
 
+### Checking the depth from other angles
+
+A single camera sees exactly where each joint is across the picture, but not how far away it is. Fulcrum works out the distance from the fact that bones keep their length. That leaves one question per bone: does it point toward the camera or away? Fulcrum answers it from many clues: knees and elbows only bend one way, feet point where you walk, feet rest on the floor, and the tracker's own depth guess. It then checks every answer against thousands of practice videos where the true answer is known.
+
+After tracking, the report says how much of the motion is verified, for example "94% of joint positions verified from any angle to within 5 cm". Verified means that on videos like the practice set, at most 1 position in 100 is off by more than that, and this holds for any viewing angle at once. Spans the camera cannot settle, such as an arm pointing straight at the lens, are marked for review instead of guessed.
+
+The check assumes a still camera and roughly the right lens setting. If the video is unlike the practice videos (very shaky tracking, limbs hidden most of the time, a jump that does not match gravity), the report says "not verified" and why. For the best result, film from about 45 degrees and 1.5 to 2 m up, at 60 fps if you can, and turn around once. Enter the person's height so sizes are exact too.
+
+This depth check is still being tuned, so it is switched off for now. Until it is switched on and calibrated, the report shows no depth line.
+
 ## For developers
 
 - `mocap/`: the video-to-3D pipeline (`landmarks.js`, `clean.js`, `solve.js`, `ground.js`, `cycle.js`, `gait.js`, `pipeline.js`), the WASD controller (`controller.js`), BVH export (`bvh.js`) and the browser app (`app.js`, `capture.js`, `viewer.js`, `character.js`, `exporters.js`).
 - It reuses Fulcrum's solvers: Butterworth and despike filters (`filters.js`), foot-plant detection (`wire/plants.js`), two-bone IK (`ik.js`) and the HumanIK retargeter (`wire/hikretarget.js`).
 - Tests: `node tests/mocap_core.test.mjs`, `node tests/mocap_motion.test.mjs`, `node tests/mocap_pipeline.test.mjs`. The pipeline tests film a synthetic person with a virtual camera, add tracker-like noise, and check the rebuilt motion against the truth.
+- Depth check: `mocap/depth.js` (bone-length geometry and the depth solver), `mocap/depthsign.js` (toward-or-away decisions), `mocap/depthstats.js`, `mocap/depthcert.js` (the error bounds and the report line), `mocap/depth_calibration.js` (generated), `mocap/mpfail.js` (simulated tracker mistakes for the practice videos) and `mocap/depthbench.js` (practice scenes and scores). It runs when the pipeline setting `depth` is true (off by default).
+- `node tools/depth_calibrate.mjs` rewrites `mocap/depth_calibration.js`; rerun it after any change to the files it hashes. `node tools/depth_benchmark.mjs` compares the depth check against the plain pipeline. Both take `--quick` for a short run.
+- `node --test tests/mocap_depth.test.mjs` runs the depth check tests.
 - `python tools/fetch_vendor.py` downloads the browser libraries by hand; `--check` reports what is there.
 - `tools/glb_to_fbx.py` is the Blender script behind the FBX export.
 - The studio no longer uses the separate LocomotionTaste program; it was removed. Its Auto Fix now uses Fulcrum's own checks.

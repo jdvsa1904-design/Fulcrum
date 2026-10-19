@@ -6,8 +6,10 @@ import { solveTake } from './solve.js';
 import { buildClips, pickLibrary, standingFrame } from './cycle.js';
 import { gaitClip, idleClip, jumpClip, defaultSpeed } from './gait.js';
 import { qmul, qrot, qyaw } from './math.js';
+import { depthPoints, gravityScale } from './depth.js';
+import { certifyTake } from './depthcert.js';
 
-export const DEFAULTS = Object.freeze({ hfov: 60, imageFit: 0.5, fc: 6, fcRoot: 4, fcDepth: 1.5, footLock: true, height: null, trim: null, person: null });
+export const DEFAULTS = Object.freeze({ hfov: 60, imageFit: 0.5, fc: 6, fcRoot: 4, fcDepth: 1.5, footLock: true, height: null, trim: null, person: null, depth: false, certify: false, gravity: true, omegaMax: 15 });
 
 export function processCapture(capture, settings = {}) {
   const s = { ...DEFAULTS, ...settings }, t0 = Date.now();
@@ -20,19 +22,18 @@ export function processCapture(capture, settings = {}) {
   const fps = series.fps, n = series.n;
   const cam = cameraPoints(series, { hfov: s.hfov, imageFit: s.imageFit });
   if (!cam) throw new Error('Could not place the person in 3D. Check that the whole body is in view.');
-  const cleaned = cleanPoints(cam.P, n, fps, s);
+  const depth = s.depth ? depthPoints(series, cam, { fps, omegaMax: s.omegaMax }) : null;
+  const cleaned = cleanPoints(depth ? depth.P : cam.P, n, fps, depth ? { ...s, fcDepth: Math.max(s.fcDepth, s.fcRoot) } : s);
   const floor = floorFromPoints(cleaned.P, n, fps);
   const tf = floorTransform(floor);
   let P = applyFloor(cleaned.P, n, tf);
   const frames = Array.from({ length: n }, (_, i) => P.subarray(i * NLM * 3, (i + 1) * NLM * 3));
   let dims = measureFromLandmarks(frames);
   let skel = buildSkeleton(dims), scale = 1;
-  if (s.height > 0.5) {
-    scale = s.height / skel.dims.height;
-    P = P.map(x => x * scale);
-    dims = Object.fromEntries(Object.entries(dims).map(([k, v]) => [k, v * scale]));
-    skel = buildSkeleton(dims);
-  }
+  const applyScale = k => { scale = k; P = P.map(x => x * scale); dims = Object.fromEntries(Object.entries(dims).map(([j, v]) => [j, v * scale])); skel = buildSkeleton(dims); };
+  let scaleSource = 'mediapipe', grav = null;
+  if (s.height > 0.5) { applyScale(s.height / skel.dims.height); scaleSource = 'height'; }
+  else if (depth && s.gravity && (grav = gravityScale(P, n, fps))?.ok) { applyScale(grav.scale); scaleSource = 'gravity'; }
   const take = solveTake(skel, P, n);
   take.fps = fps;
   const ground = groundTake(skel, take, fps);
@@ -42,10 +43,11 @@ export function processCapture(capture, settings = {}) {
   const built = buildClips(skel, take, fps, plants, s.clips ?? {});
   const library = completeLibrary(skel, take, fps, built.clips, s);
   const camera = { focal: cam.focal, width: cam.width, height: cam.height, q: tf.q, offset: tf.offset, height_m: -tf.offset * scale, hfov: s.hfov, scale };
+  const cert = depth && s.certify ? certifyTake({ series, cam, depth, skel, take, camera, fps, n, scaleSource, grav, height: s.height }) : null;
   return {
-    settings: s, skel, take, fps, n, first: series.first, last: series.last, tracks, track, series, camera, floor, landmarks: P, plants,
+    depth, cert, settings: s, skel, take, fps, n, first: series.first, last: series.last, tracks, track, series, camera, floor, landmarks: P, plants,
     clips: built.clips, segments: built.segments, library,
-    report: { frames: n, seconds: n / fps, tracks: tracks.length, coverage: series.valid.reduce((a, v) => a + v, 0) / n, spikes: cleaned.spikes, floor: floor.method, floorPoints: floor.points, ground, lock, plants: plants.length, sliding: plants.filter(p => p.sliding).length, skate: skate.length ? Math.max(...skate.map(x => x.drift)) : 0, ms: Date.now() - t0 },
+    report: { frames: n, seconds: n / fps, tracks: tracks.length, coverage: series.valid.reduce((a, v) => a + v, 0) / n, spikes: cleaned.spikes, floor: floor.method, floorPoints: floor.points, ground, lock, plants: plants.length, sliding: plants.filter(p => p.sliding).length, skate: skate.length ? Math.max(...skate.map(x => x.drift)) : 0, ms: Date.now() - t0, depth: cert?.summary ?? (depth ? { on: true, scaleSource, kappa: depth.kappa, ms: depth.ms, line: '' } : undefined) },
   };
 }
 

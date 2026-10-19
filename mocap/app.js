@@ -265,6 +265,7 @@ function solve(first = false) {
     `${r.frames} frames (${r.seconds.toFixed(1)} s) of person ${res.track.id + 1}${res.tracks.length > 1 ? ` of ${res.tracks.length} found` : ''}`,
     `Body height ${(res.skel.dims.height * 100).toFixed(0)} cm · camera ${res.camera.height_m.toFixed(2)} m up`,
     `${r.plants} foot plants · solved in ${r.ms} ms`,
+    r.depth?.line || '',
     res.tracks.length > 1 ? 'Wrong person? Click them in the video.' : '',
   ].filter(Boolean).join('\n');
   $('videoPane').classList.toggle('pickable', res.tracks.length > 1 && !!S.video);

@@ -1,6 +1,7 @@
 import { add, sub, scale, dot, cross, norm, mid } from './math.js';
 import { NB, NLM, LM, fk, getV, landmarksFromPose, lmAt } from './skeleton.js';
 import { IMG_STRIDE } from './landmarks.js';
+import { mediapipeFailures } from './mpfail.js';
 
 export function lookAtCamera(pos, target, o = {}) {
   const f = norm(sub(target, pos)), r = norm(cross(f, [0, 1, 0])), dn = cross(f, r);
@@ -19,6 +20,7 @@ export function synthCapture(skel, take, cam, o = {}) {
   const rand = o.rand ?? Math.random, gauss = () => { let u = 0, v = 0; while (!u) u = rand(); v = rand(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
   const noiseImg = o.noiseImg ?? 0, noiseWorld = o.noiseWorld ?? 0, noiseDepth = o.noiseDepth ?? noiseWorld * 2, fps = take.fps ?? o.fps ?? 30;
   const frames = [], tmp = { pos: new Float64Array(NB * 3), q: new Float64Array(NB * 4) }, truth = [];
+  const subj = o.mp ? [] : null, camPts = o.mp ? [] : null;
   for (let i = 0; i < take.n; i++) {
     fk(skel, getV(take.root, i), take.rot.subarray(i * NB * 4, (i + 1) * NB * 4), tmp);
     const L = landmarksFromPose(skel, tmp);
@@ -39,10 +41,15 @@ export function synthCapture(skel, take, cam, o = {}) {
       world[j * 3 + 2] = c[2] - hip[2] + gauss() * noiseDepth;
     }
     const poses = [{ img, world }];
+    if (subj) { subj.push(poses[0]); camPts.push(C); }
     if (o.extraPerson) poses.push(o.extraPerson(i));
     frames.push({ t: i / fps, poses: o.shuffle && i % 2 ? poses.reverse() : poses });
   }
-  return { capture: { version: 1, video: { name: o.name ?? 'synthetic', width: cam.width, height: cam.height, fps, duration: take.n / fps, frames: take.n }, model: 'synthetic', frames }, truth };
+  const capture = { version: 1, video: { name: o.name ?? 'synthetic', width: cam.width, height: cam.height, fps, duration: take.n / fps, frames: take.n }, model: 'synthetic', frames };
+  if (!o.mp) return { capture, truth };
+  const faults = mediapipeFailures(subj, camPts, cam, o.mp, fps, o.mpSeed ?? 1);
+  frames.forEach((fr, i) => { if (faults.drop[i]) fr.poses = fr.poses.filter(p => p !== subj[i]); });
+  return { capture, truth, faults };
 }
 
 export function staticPerson(skel, cam, at, o = {}) {
