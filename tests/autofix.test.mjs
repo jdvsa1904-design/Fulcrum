@@ -1,0 +1,122 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { planFixes, autoFixLoop, sideOf, score } from '../wire/autofix.js';
+
+const F = (rule, a, b, extra = {}) => ({ rule, body_part: 'left foot', severity: 'blocker', frame_start: a, frame_end: b, phase: 'in_place', ...extra });
+const ctx = { fixes: [], locks: [], n: 300, fps: 24 };
+
+test('sideOf maps body parts', () => {
+  assert.equal(sideOf('left foot'), 'l');
+  assert.equal(sideOf('right foot'), 'r');
+  assert.equal(sideOf('feet'), null);
+});
+
+test('float becomes padded ground on that side', () => {
+  const p = planFixes([F('ground_float', 69, 77)], ctx);
+  assert.deepEqual(p.fixes[0], { type: 'ground', a: 66, b: 80, side: 'l', anchor: 'ankle' });
+});
+
+test('float padding clamps to the take', () => {
+  const p = planFixes([F('ground_float', 1, 298, { body_part: 'feet' })], ctx);
+  assert.equal(p.fixes[0].a, 0); assert.equal(p.fixes[0].b, 299); assert.equal(p.fixes[0].side, null);
+});
+
+test('sink becomes floor', () => {
+  assert.equal(planFixes([F('ground_sink', 10, 20)], ctx).fixes[0].type, 'floor');
+});
+
+test('pop becomes padded despike', () => {
+  assert.deepEqual(planFixes([F('pop', 100, 100)], ctx).fixes[0], { type: 'despike', a: 98, b: 102 });
+});
+
+test('slide locks the matching plant', () => {
+  const p = planFixes([F('foot_slide', 40, 45)], { ...ctx, plants: [{ side: 'r', a: 30, b: 50 }, { side: 'l', a: 35, b: 52 }] });
+  assert.deepEqual(p.locks, [{ side: 'l', a: 35, b: 52 }]);
+});
+
+test('slide without plants locks the finding range; covered slide is skipped', () => {
+  assert.deepEqual(planFixes([F('foot_slide', 40, 45)], ctx).locks, [{ side: 'l', a: 40, b: 45 }]);
+  const p = planFixes([F('foot_slide', 40, 45)], { ...ctx, locks: [{ side: 'l', a: 38, b: 60 }] });
+  assert.equal(p.locks.length, 1); assert.equal(p.changes.length, 0);
+});
+
+test('slide with no side and no plants locks both feet', () => {
+  const p = planFixes([F('foot_slide', 40, 45, { body_part: 'feet' })], ctx);
+  assert.deepEqual(p.locks, [{ side: 'l', a: 40, b: 45 }, { side: 'r', a: 40, b: 45 }]);
+  const q = planFixes([F('foot_slide', 40, 45, { body_part: 'feet' })], { ...ctx, locks: [{ side: 'l', a: 30, b: 60 }] });
+  assert.deepEqual(q.locks.slice(1), [{ side: 'r', a: 40, b: 45 }]);
+});
+
+test('toe-out in locomotion edits the existing travel toe without mutating input', () => {
+  const fixes = [{ type: 'travel', a: 0, b: 200, speed: 4 }];
+  const p = planFixes([F('planted_toe_out_deg', 50, 60, { phase: 'locomotion', value: 30, expected_range: [null, 18] })], { ...ctx, fixes });
+  assert.equal(p.fixes.length, 1); assert.equal(p.fixes[0].toe, -12);
+  assert.equal(fixes[0].toe, undefined);
+});
+
+test('ankle in locomotion sets travel pitch', () => {
+  const p = planFixes([F('planted_ankle_deg', 50, 60, { phase: 'locomotion', value: 25, expected_range: [-10, 15] })], { ...ctx, fixes: [{ type: 'travel', a: 0, b: 200 }] });
+  assert.equal(p.fixes[0].pitch, 15);
+});
+
+test('toe-out without travel adds a single level', () => {
+  const p = planFixes([F('planted_toe_out_deg', 5, 9), F('planted_ankle_deg', 20, 30)], ctx);
+  assert.deepEqual(p.fixes, [{ type: 'level', side: 'l' }]);
+});
+
+test('crossing warning is note only, crossing blocker smooths', () => {
+  const w = planFixes([F('crossing', 10, 12, { severity: 'warning' })], ctx);
+  assert.equal(w.fixes.length, 0); assert.match(w.notes[0], /note only/);
+  assert.equal(planFixes([F('crossing', 10, 12)], ctx).fixes[0].type, 'smooth');
+});
+
+test('unknown rules note only and duplicates collapse', () => {
+  const p = planFixes([F('bounce', 1, 2), F('pop', 100, 100), F('pop', 100, 100)], ctx);
+  assert.equal(p.fixes.length, 1); assert.equal(p.notes.length, 3);
+});
+
+test('score counts blockers and warnings', () => {
+  assert.deepEqual(score([F('pop', 1, 1), F('pop', 1, 1, { severity: 'warning' }), F('pop', 1, 1, { severity: 'info' })]), { blockers: 1, warnings: 1 });
+});
+
+function fakeJudge(base, cures) {
+  return async st => base.filter(f => !cures.some(([rule, ok]) => f.rule === rule && st.fixes.concat(st.locks).some(ok)));
+}
+
+test('loop keeps helpful fixes and stops clean', async () => {
+  const base = [F('pop', 100, 100), F('ground_float', 69, 77)];
+  const judge = fakeJudge(base, [['pop', x => x.type === 'despike'], ['ground_float', x => x.type === 'ground']]);
+  const applied = [];
+  const r = await autoFixLoop({ judge, apply: s => applied.push(s), n: 300, fps: 24 });
+  assert.equal(r.reason, 'clean'); assert.equal(r.end.blockers, 0); assert.equal(r.kept.length, 2);
+  assert.equal(r.fixes.length, 2); assert.ok(applied.length >= 3);
+});
+
+test('loop reverts a fix that does not help', async () => {
+  const base = [F('pop', 100, 100), F('ground_float', 69, 77)];
+  const judge = fakeJudge(base, [['pop', x => x.type === 'despike']]);
+  const applied = [];
+  const r = await autoFixLoop({ judge, apply: s => applied.push(s), n: 300 });
+  assert.equal(r.reason, 'no_progress'); assert.equal(r.end.blockers, 1);
+  assert.deepEqual(r.fixes.map(x => x.type), ['despike']);
+  assert.ok(r.reverted.some(x => /ground/.test(x.note)));
+  assert.deepEqual(applied.at(-1).fixes.map(x => x.type), ['despike']);
+});
+
+test('loop reverts a fix that makes things worse', async () => {
+  const judge = async st => st.fixes.some(x => x.type === 'despike') ? [F('pop', 1, 1), F('bounce', 1, 1)] : [F('pop', 1, 1)];
+  const r = await autoFixLoop({ judge, apply: () => {}, n: 300 });
+  assert.equal(r.fixes.length, 0); assert.equal(r.reason, 'no_progress'); assert.equal(r.rounds, 1);
+});
+
+test('loop respects maxRounds and accepts the {findings} judge shape', async () => {
+  let k = 0;
+  const judge = async () => ({ findings: [F('pop', 10 + k, 10 + k)].concat(Array.from({ length: Math.max(0, 5 - k++) }, () => F('bounce', 1, 1))) });
+  const r = await autoFixLoop({ judge, apply: () => {}, maxRounds: 2, n: 300 });
+  assert.equal(r.rounds, 2); assert.equal(r.reason, 'max_rounds');
+});
+
+test('loop with no blockers does nothing', async () => {
+  const r = await autoFixLoop({ judge: async () => [F('pop', 1, 1, { severity: 'warning' })], apply: () => {}, n: 300 });
+  assert.equal(r.rounds, 0); assert.equal(r.reason, 'clean');
+});

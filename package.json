@@ -1,0 +1,11 @@
+{
+  "name": "fulcrum",
+  "version": "0.1.0",
+  "description": "Turn a video of a person into a 3D animated character you can drive with the keyboard.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\""
+  }
+}

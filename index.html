@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fulcrum Mocap</title>
+<link rel="icon" href="fulcrum.ico">
+<link rel="stylesheet" href="mocap/app.css">
+<script type="importmap">
+{"imports":{
+ "three":"./vendor/three/build/three.module.js",
+ "three/addons/":"./vendor/three/examples/jsm/"
+}}
+</script>
+</head>
+<body>
+<div class="app" id="app" data-mode="review">
+  <header class="top">
+    <div class="brand">Fulcrum <small>video to 3D</small></div>
+    <nav class="steps" aria-label="Steps">
+      <button type="button" data-step="video" class="on"><b>1</b>Video</button>
+      <button type="button" data-step="track"><b>2</b>Track</button>
+      <button type="button" data-step="moves"><b>3</b>Moves</button>
+      <button type="button" data-step="play"><b>4</b>Play</button>
+    </nav>
+    <span class="spacer"></span>
+    <a href="studio.html" title="Open the animation clean-up studio">Studio</a>
+    <select id="theme" class="btn small" aria-label="Appearance"><option value="system">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select>
+  </header>
+
+  <main class="stage">
+    <section class="pane video-pane" id="videoPane" aria-label="Video">
+      <div class="drop" id="drop">
+        <h2>Drop a video of a person moving</h2>
+        <p>Any MP4 or WebM where the whole body is visible. Walking, running, dancing, fighting moves: Fulcrum turns it into a 3D animation you can play with your keyboard.</p>
+        <div class="row">
+          <label class="btn primary file">Choose video<input type="file" id="videoIn" accept="video/*,.mp4,.mov,.webm,.mkv,.avi"></label>
+          <label class="btn file">Open project<input type="file" id="projectIn" accept=".json"></label>
+        </div>
+        <button type="button" class="btn small" id="demoBtn">No video handy? Try a test walk</button>
+      </div>
+      <video id="video" playsinline muted preload="auto"></video>
+      <canvas id="overlay"></canvas>
+      <div class="pane-label">Video</div>
+    </section>
+    <section class="pane view-pane" id="viewPane" aria-label="3D view">
+      <div id="three" tabindex="0" aria-label="3D view. In play mode use W A S D to move."></div>
+      <div class="hud" id="hud"></div>
+      <div class="keys" id="keys">
+        <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move</span>
+        <span><kbd>Shift</kbd> run</span>
+        <span><kbd>Alt</kbd> slow walk</span>
+        <span><kbd>Space</kbd> jump</span>
+        <span><kbd>E</kbd> first move</span>
+        <span><kbd>1</kbd>–<kbd>9</kbd> moves</span>
+        <span><kbd>R</kbd> replay video</span>
+        <span><kbd>F</kbd> full screen</span>
+        <span>drag to look · scroll to zoom</span>
+        <span><kbd>Esc</kbd> stop</span>
+      </div>
+      <div class="pane-label">3D</div>
+    </section>
+  </main>
+
+  <footer class="timeline" aria-label="Timeline">
+    <div class="tbar">
+      <button type="button" class="btn" id="playBtn" title="Play or pause (Space)" aria-label="Play or pause">▶</button>
+      <span id="timeText">No video</span>
+    </div>
+    <canvas id="tl" aria-label="Scrub through the video"></canvas>
+  </footer>
+
+  <aside class="panel" id="panel">
+    <section data-step="video" class="on">
+      <h3>1. Video</h3>
+      <p class="lead" id="videoLead">Pick a video. Phone clips are fine. Keep the camera still if you can, and the whole body in view.</p>
+      <p class="info" id="videoInfo"></p>
+      <div class="field"><span>Frames per second</span><input type="number" id="fpsIn" min="5" max="240" step="0.001" value="30"></div>
+      <div class="field"><span>Start (s)</span><input type="number" id="trimA" min="0" step="0.1" value="0"></div>
+      <div class="field"><span>End (s)</span><input type="number" id="trimB" min="0" step="0.1" value="0"></div>
+      <div class="row">
+        <label class="btn file">Choose another video<input type="file" id="videoIn2" accept="video/*,.mp4,.mov,.webm,.mkv,.avi"></label>
+        <button type="button" class="btn primary" id="toTrack" disabled>Next: track the person</button>
+      </div>
+    </section>
+
+    <section data-step="track">
+      <h3>2. Track the person</h3>
+      <p class="lead">Fulcrum finds the body in every frame, then rebuilds it in 3D on a skeleton.</p>
+      <div class="field"><span>Quality</span><select id="modelSel"><option value="lite">Fast</option><option value="full" selected>Balanced</option><option value="heavy">Best (slow)</option></select></div>
+      <div class="row"><button type="button" class="btn primary" id="trackBtn" disabled>Track motion</button><button type="button" class="btn" id="cancelBtn" hidden>Cancel</button></div>
+      <div class="progress" id="progress" hidden><i></i></div>
+      <p class="status" id="trackStatus"></p>
+      <p class="info" id="trackInfo"></p>
+      <label class="check"><input type="checkbox" id="fitOn" checked> Show the 3D result over the video</label>
+      <details id="tune">
+        <summary>Fine-tune</summary>
+        <div class="field"><span>Camera lens (field of view)</span><output id="fovOut">60°</output><input type="range" id="fov" min="30" max="120" step="1" value="60"></div>
+        <div class="field"><span>Smoothing</span><output id="smoothOut">6 Hz</output><input type="range" id="smooth" min="2" max="12" step="0.5" value="6"></div>
+        <div class="field"><span>Trust the 2D picture</span><output id="fitOut">0.5</output><input type="range" id="imageFit" min="0" max="1" step="0.05" value="0.5"></div>
+        <div class="field"><span>Person height (cm, blank = guess)</span><input type="number" id="heightIn" min="80" max="230" step="1" placeholder="auto"></div>
+        <label class="check"><input type="checkbox" id="lockOn" checked> Keep feet planted (no sliding)</label>
+        <div class="row"><button type="button" class="btn small" id="camBtn">View from the video camera</button></div>
+      </details>
+      <button type="button" class="btn primary" id="toMoves" disabled>Next: see the moves</button>
+    </section>
+
+    <section data-step="moves">
+      <h3>3. Your moves</h3>
+      <p class="lead">These came out of the video. Click one to preview it. Moves marked <em>made up</em> were not in the video, so Fulcrum filled them in.</p>
+      <ul class="clips" id="clipList"></ul>
+      <button type="button" class="btn primary" id="toPlay" disabled>Next: play it</button>
+    </section>
+
+    <section data-step="play">
+      <h3>4. Play</h3>
+      <p class="lead">Drive the character with the keyboard. The camera follows it; drag to look around.</p>
+      <div class="row"><button type="button" class="btn primary" id="playMode" disabled>Start playing</button></div>
+      <div class="legend" id="legend"></div>
+      <div class="field"><span>Character</span><select id="charSel"><option value="mannequin">Mannequin</option></select></div>
+      <label class="btn file">Load your character (GLB, glTF or FBX)<input type="file" id="charIn" accept=".glb,.gltf,.fbx"></label>
+      <p class="status" id="charStatus"></p>
+    </section>
+
+    <section class="always" id="exportBox">
+      <h3>Export</h3>
+      <div class="row">
+        <button type="button" class="btn" id="glbBtn" disabled>Character + moves (.glb)</button>
+        <button type="button" class="btn" id="fbxBtn" disabled title="Needs Blender installed. Unreal and most 3D apps open FBX.">For Unreal (.fbx)</button>
+        <button type="button" class="btn" id="bvhBtn" disabled>Full take (.bvh)</button>
+        <button type="button" class="btn" id="saveBtn" disabled>Save project</button>
+      </div>
+      <p class="status" id="exportStatus"></p>
+    </section>
+  </aside>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="mocap/app.js"></script>
+</body>
+</html>
