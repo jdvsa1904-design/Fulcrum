@@ -42,11 +42,11 @@ def open_window():
     edge = next((p for p in EDGE if os.path.exists(p)), None)
     profile = ROOT / ".appprofile"
     if edge:
-        subprocess.Popen([edge, f"--app={URL}", f"--user-data-dir={profile}", "--window-size=1600,1000",
+        subprocess.Popen([edge, f"--app={URL}/studio.html", f"--user-data-dir={profile}", "--window-size=1600,1000",
                           "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
                           "--disable-backgrounding-occluded-windows"])
     else:
-        os.startfile(URL)
+        os.startfile(URL + "/studio.html")
 
 
 if not up():
