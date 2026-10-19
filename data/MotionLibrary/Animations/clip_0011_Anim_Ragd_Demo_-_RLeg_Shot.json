@@ -1,0 +1,59 @@
+{
+  "frames": 15,
+  "fps": 30.0,
+  "bones": 62,
+  "basis": "X reflection; Y up; original world units",
+  "offset_policy": "Zero OFFSET for position-channel joints; actual local joint origins in XYZposition. Avoids offset interpretation differences. Static reference supplied separately.",
+  "fractional_tail_seconds": 0.01403376658757527,
+  "max_adjacent_world_rotation_degrees": 43.7124178833123,
+  "quaternion_norm_max_error": 3.3306690738754696e-16,
+  "name": "Anim_Ragd_Demo_-_RLeg_Shot",
+  "file": "clip_0011_Anim_Ragd_Demo_-_RLeg_Shot.bvh",
+  "reconstruction": "Approximate; native fidelity unverified",
+  "rig_assignment": "paired",
+  "sha256": "4b3a3362cd9120f23a5279cbf8747968a14da809cc67fa58f3ecd180ad4757d2",
+  "conversion_validation": {
+    "bones": 62,
+    "frames": 15,
+    "fps": 30.0,
+    "frame_time": 0.03333333333333333,
+    "comparisons": {
+      "npz_reconstruction_to_source_bvh": {
+        "finite": true,
+        "max_position_error": 9.66557394267988e-12,
+        "rms_position_error": 3.1726219586761377e-12,
+        "max_angle_error_deg": 2.4148365394514667e-06,
+        "rms_angle_error_deg": 7.459856017189585e-07
+      },
+      "source_bvh_to_blender_import": {
+        "finite": true,
+        "max_position_error": 3.826515438163884e-07,
+        "rms_position_error": 1.4874526769684015e-07,
+        "max_angle_error_deg": 2.2781522350186147e-05,
+        "rms_angle_error_deg": 8.16802537636735e-06
+      },
+      "source_bvh_to_blender_export_bvh": {
+        "finite": true,
+        "max_position_error": 3.3661951703197343e-06,
+        "rms_position_error": 1.192203452135234e-06,
+        "max_angle_error_deg": 2.7953753927588804e-05,
+        "rms_angle_error_deg": 1.1112889942505115e-05
+      },
+      "source_bvh_to_blender_reimport": {
+        "finite": true,
+        "max_position_error": 3.601231737248819e-06,
+        "rms_position_error": 1.2047810150409288e-06,
+        "max_angle_error_deg": 3.916206761302386e-05,
+        "rms_angle_error_deg": 1.3677924513288912e-05
+      }
+    },
+    "passed": true,
+    "native_reference": false
+  },
+  "limitations": [
+    "Offline reconstruction includes approximate body fitting, limb constraints and twist handling.",
+    "Retargeted clips use a replacement rig.",
+    "Conversion checks measure preservation of the reconstruction, not native motion fidelity.",
+    "Partial final intervals are omitted at fixed FPS and recorded as fractional_tail_seconds."
+  ]
+}
