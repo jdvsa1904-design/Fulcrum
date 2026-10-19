@@ -49,9 +49,9 @@ export function cleanPoints(P, n, fps, o = {}) {
     t = lowpassVec(t, 3, fps, fc);
     for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) out[(i * NLM + j) * 3 + k] = t[i * 3 + k];
   }
-  const root = new Float64Array(n * 3), ch = new Float64Array(n);
+  const root = new Float64Array(n * 3), Rs = o.despike !== false && n > 6 ? peakRemovalVec(R, 3, { timeTolerance: 3, valueTolerance: o.spikeTolerance ?? 4 }) : R, ch = new Float64Array(n);
   for (let k = 0; k < 3; k++) {
-    for (let i = 0; i < n; i++) ch[i] = R[i * 3 + k];
+    for (let i = 0; i < n; i++) ch[i] = Rs[i * 3 + k];
     const r = lowpass(ch, fps, k === 2 ? fcDepth : fcRoot);
     for (let i = 0; i < n; i++) root[i * 3 + k] = r[i];
   }

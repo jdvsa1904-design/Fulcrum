@@ -134,9 +134,10 @@ export function groundTake(skel, take, fps, o = {}) {
     for (const side of ['L', 'R']) if (masks[side][i]) low = Math.min(low, sig[side].low[i]);
     if (low < Infinity) { dy[i] = -low; ok[i] = 1; }
   }
-  if (!ok.some(Boolean)) {
-    const lowest = Math.min(percentile(sig.L.low, 0.05), percentile(sig.R.low, 0.05));
-    dy.fill(Number.isFinite(lowest) ? -lowest : 0);
+  const count = ok.reduce((s, v) => s + v, 0);
+  if (count < (o.minContactShare ?? 0.3) * n) {
+    const w = Math.max(2, Math.round((o.windowSec ?? 0.35) * fps)), low = Float64Array.from({ length: n }, (_, i) => Math.min(sig.L.low[i], sig.R.low[i]));
+    for (let i = 0; i < n; i++) dy[i] = -percentile(low.subarray(Math.max(0, i - w), Math.min(n, i + w + 1)), o.lowPct ?? 0.25);
   } else {
     let prev = -1;
     for (let i = 0; i <= n; i++) {
@@ -147,7 +148,7 @@ export function groundTake(skel, take, fps, o = {}) {
   }
   const sm = lowpass(dy, fps, o.fcGround ?? 2);
   for (let i = 0; i < n; i++) take.root[i * 3 + 1] += sm[i];
-  return { dy: sm, contactFrames: ok.reduce((s, v) => s + v, 0) };
+  return { dy: Array.from(sm, x => Math.round(x * 1000) / 1000), contactFrames: count, method: count < (o.minContactShare ?? 0.3) * n ? 'lower-foot' : 'contacts' };
 }
 
 export function findPlants(skel, take, fps, o = {}) {

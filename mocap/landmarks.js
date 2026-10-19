@@ -31,14 +31,23 @@ function poseVis(img) {
   return s / (NLM - 11);
 }
 
+function iou(a, b) {
+  const w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]), h = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
+  if (w <= 0 || h <= 0) return 0;
+  const i = w * h;
+  return i / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i);
+}
+
 export function buildTracks(capture, o = {}) {
   const aspect = (capture.video.width || 16) / (capture.video.height || 9), fps = capture.video.fps || 30;
   const maxGap = Math.max(2, Math.round((o.maxGapSec ?? 0.6) * fps)), tracks = [];
   capture.frames.forEach((fr, f) => {
-    const dets = (fr.poses || []).map((p, k) => {
+    const all = (fr.poses || []).map((p, k) => {
       const box = poseBox(p.img), c = poseCenter(p.img, aspect);
       return { k, c, size: Math.max(0.02, Math.hypot((box[2] - box[0]) * aspect, box[3] - box[1])), vis: poseVis(p.img), box };
-    });
+    }).sort((a, b) => b.vis * b.size - a.vis * a.size);
+    const dets = [];
+    for (const d of all) if (!dets.some(e => iou(e.box, d.box) > (o.dupIou ?? 0.5))) dets.push(d);
     const live = tracks.filter(t => f - t.last <= maxGap);
     const pairs = [];
     for (const t of live) for (const d of dets) {
@@ -53,16 +62,22 @@ export function buildTracks(capture, o = {}) {
       usedT.add(t); usedD.add(d);
       const gap = f - t.last;
       t.v = [(d.c[0] - t.c[0]) / gap * 0.6 + t.v[0] * 0.4, (d.c[1] - t.c[1]) / gap * 0.6 + t.v[1] * 0.4];
+      t.lo = [Math.min(t.lo[0], d.c[0]), Math.min(t.lo[1], d.c[1])];
+      t.hi = [Math.max(t.hi[0], d.c[0]), Math.max(t.hi[1], d.c[1])];
       t.c = d.c; t.size = d.size * 0.5 + t.size * 0.5; t.last = f;
       t.frames.set(f, d.k);
       t.score += d.size * d.vis;
+      t.sizeSum += d.size;
     }
     for (const d of dets) {
       if (usedD.has(d)) continue;
-      tracks.push({ id: tracks.length, c: d.c, v: [0, 0], size: d.size, first: f, last: f, frames: new Map([[f, d.k]]), score: d.size * d.vis });
+      tracks.push({ id: tracks.length, c: d.c, v: [0, 0], size: d.size, first: f, last: f, frames: new Map([[f, d.k]]), score: d.size * d.vis, sizeSum: d.size, lo: d.c.slice(), hi: d.c.slice() });
     }
   });
-  return tracks.map(t => ({ id: t.id, first: t.first, last: t.last, frames: t.frames, score: t.score, count: t.frames.size }));
+  return tracks.map(t => {
+    const meanSize = t.sizeSum / t.frames.size, travel = Math.hypot(t.hi[0] - t.lo[0], t.hi[1] - t.lo[1]) / Math.max(1e-6, meanSize);
+    return { id: t.id, first: t.first, last: t.last, frames: t.frames, count: t.frames.size, travel, score: t.score * (1 + Math.min(1, travel / 3)) };
+  });
 }
 
 export function pickTrack(tracks, capture, o = {}) {
@@ -88,12 +103,33 @@ export function pickTrack(tracks, capture, o = {}) {
   return tracks.reduce((a, b) => b.score > a.score ? b : a);
 }
 
+export function frameQuality(img) {
+  let inside = 0, vis = 0;
+  for (let i = 11; i < NLM; i++) {
+    const x = img[i * IMG_STRIDE], y = img[i * IMG_STRIDE + 1];
+    if (x > -0.02 && x < 1.02 && y > -0.02 && y < 1.02) inside++;
+    vis += img[i * IMG_STRIDE + 3];
+  }
+  return { inside: inside / (NLM - 11), vis: vis / (NLM - 11) };
+}
+
 export function trackSeries(capture, track, o = {}) {
-  const first = Math.max(track.first, o.trim?.[0] ?? 0), last = Math.min(track.last, o.trim?.[1] ?? Infinity);
+  let first = Math.max(track.first, o.trim?.[0] ?? 0), last = Math.min(track.last, o.trim?.[1] ?? Infinity);
+  const good = (f, edge) => {
+    const k = track.frames.get(f);
+    if (k === undefined) return false;
+    const img = capture.frames[f].poses[k].img, q = frameQuality(img), b = poseBox(img), m = o.border ?? 0.004;
+    if (edge && (b[0] < m || b[2] > 1 - m || b[3] > 1 - m / 2)) return false;
+    return q.inside >= (o.minInside ?? 0.85) && q.vis >= (o.minVis ?? 0.45);
+  };
+  if (o.edgeTrim !== false) {
+    while (first < last && !good(first, true)) first++;
+    while (last > first && !good(last, true)) last--;
+  }
   const n = Math.max(0, last - first + 1), img = new Float64Array(n * NLM * IMG_STRIDE), world = new Float64Array(n * NLM * 3), valid = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
     const f = first + i, k = track.frames.get(f);
-    if (k === undefined) continue;
+    if (k === undefined || (o.edgeTrim !== false && !good(f))) continue;
     const p = capture.frames[f].poses[k];
     img.set(p.img, i * NLM * IMG_STRIDE);
     world.set(p.world, i * NLM * 3);

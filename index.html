@@ -3,153 +3,136 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Fulcrum</title>
-<link rel="stylesheet" href="style.css?v=workspace-20261016b">
-<link rel="stylesheet" href="ui/grapheditor.css">
+<title>Fulcrum Mocap</title>
+<link rel="icon" href="fulcrum.ico">
+<link rel="stylesheet" href="mocap/app.css">
 <script type="importmap">
 {"imports":{
- "three":"https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
- "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+ "three":"./vendor/three/build/three.module.js",
+ "three/addons/":"./vendor/three/examples/jsm/"
 }}
 </script>
 </head>
 <body>
-<div class="app">
-  <header class="titlebar">
-    <div class="window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
-    <div class="title-stack"><h1>Fulcrum</h1><span class="sub" id="status" role="status" aria-live="polite">Load a character and a take.</span></div>
-    <span class="toolbar-badge">Motion Studio</span>
-    <select id="themePicker" aria-label="Appearance"><option value="system">System appearance</option><option value="light">Light</option><option value="dark">Dark</option></select>
-  </header>
-  <nav class="workspace-nav" aria-label="Workspaces">
-    <span class="nav-label">WORKSPACES</span>
-    <button type="button" data-workspace="scene">Scene</button>
-    <button type="button" data-workspace="animate" class="on" aria-current="page">Animate</button>
-    <button type="button" data-workspace="rig">Rig</button>
-    <button type="button" data-workspace="physics">Physics</button>
-    <button type="button" data-workspace="review">Review</button>
-    <button type="button" data-workspace="export">Export</button>
-  </nav>
-  <div class="tool-shelf" role="toolbar" aria-label="Animation tools">
-    <div class="shelf-group"><span class="shelf-label">PROJECT</span><button type="button" data-action="loadFRT" title="Load FRT drill" aria-label="Load FRT drill">↧</button><button type="button" data-action="editUndo" title="Undo" aria-label="Undo">↶</button><button type="button" data-action="editRedo" title="Redo" aria-label="Redo">↷</button></div>
-    <div class="shelf-group"><span class="shelf-label">ANIMATE</span><button type="button" data-action="rigKeyFk" title="Key selected control" aria-label="Key selected control">◆</button><button type="button" data-action="assistPose" title="Suggest pose" aria-label="Suggest pose">✦</button><button type="button" data-action="geToggle" title="Toggle graph editor" aria-label="Toggle graph editor">⌁</button></div>
-    <div class="shelf-group"><span class="shelf-label">CONTACTS</span><button type="button" data-action="lockL" title="Lock left foot" aria-label="Lock left foot">L</button><button type="button" data-action="lockR" title="Lock right foot" aria-label="Lock right foot">R</button><button type="button" data-action="pinHand" title="Pin left hand to grip" aria-label="Pin left hand to grip">⌖</button></div>
-    <div class="shelf-group"><span class="shelf-label">OUTPUT</span><button type="button" data-action="runTaste" title="Judge locomotion" aria-label="Judge locomotion">✓</button><button type="button" data-action="saveProj" title="Save project" aria-label="Save project">▣</button></div>
-  </div>
-  <main class="main">
-    <nav class="tool-rail" aria-label="Tool rail">
-      <button type="button" data-workspace="scene" title="Scene and takes" aria-label="Scene and takes">▦</button>
-      <button type="button" data-workspace="animate" title="Pose and animation" aria-label="Pose and animation" class="on" aria-current="page">◈</button>
-      <button type="button" data-workspace="rig" title="Rig and constraints" aria-label="Rig and constraints">⌘</button>
-      <button type="button" data-workspace="physics" title="Physics and contacts" aria-label="Physics and contacts">◉</button>
-      <button type="button" data-workspace="review" title="Quality review" aria-label="Quality review">✓</button>
-      <span class="rail-spacer"></span>
-      <button type="button" data-workspace="export" title="Export" aria-label="Export">⇧</button>
+<div class="app" id="app" data-mode="review">
+  <header class="top">
+    <div class="brand">Fulcrum <small>video to 3D</small></div>
+    <nav class="steps" aria-label="Steps">
+      <button type="button" data-step="video" class="on"><b>1</b>Video</button>
+      <button type="button" data-step="track"><b>2</b>Track</button>
+      <button type="button" data-step="moves"><b>3</b>Moves</button>
+      <button type="button" data-step="play"><b>4</b>Play</button>
     </nav>
-    <div class="view" id="view" role="region" aria-label="3D pose viewport"><div class="hud" id="hud" aria-hidden="true"></div><div class="legend"><span class="sw com"></span>center of mass <span class="sw lock"></span>foot lock <span class="sw pin"></span>hand pin</div></div>
-    <aside id="panel">
-      <div class="inspector-head"><span id="workspaceTitle">Animate</span><small>INSPECTOR</small></div>
-      <section data-workspaces="scene">
-        <h2>Take</h2>
-        <div class="row"><select id="sampleList" aria-label="Sample files"></select></div>
-        <div class="row"><button id="loadBody">Load as character</button><button id="appendTake">Append to take</button></div>
-        <div class="row"><label class="file">Open FBX…<input type="file" id="fileIn" accept=".fbx" multiple></label><button id="loadFRT" class="primary">Load FRT drill</button></div>
-        <div class="row"><label class="file">Import + auto-rig FBX…<input type="file" id="autoRigIn" accept=".fbx"></label></div>
-        <p class="note">Already-rigged FBX: recognize the skeleton and build animator controls. Unrigged FBX: fit a starter skeleton and proximity skin to an upright Y-up humanoid mesh. Inspect the fit and weights before production use.</p>
-        <div class="row"><label>Retarget <select id="retargetMode" aria-label="Retarget mode"><option value="auto">auto</option><option value="names">by bone name</option><option value="hik">HumanIK (any humanoid)</option></select></label></div>
-        <div class="row"><label><input type="checkbox" id="seamOn"> Match shot seams</label></div>
-        <div class="row"><button id="cutSel">Cut selection</button><button id="insertSel">Insert selection at playhead</button><button id="retimeSel">Retiming selection</button><label>Scale <input type="number" id="retimeScale" value="1.25" min="0.1" max="10" step="0.05"></label></div>
-        <div class="row"><label><input type="checkbox" id="storyOn" checked> Story blend</label><select id="storyCurve" aria-label="Story blend curve"><option value="ease">ease</option><option value="linear">linear</option><option value="slow_in">slow in</option><option value="fast_in">fast in</option></select><label>Blend <input type="number" id="storyBlend" value="6" min="1" max="60"> f</label></div>
-        <ul class="list" id="shotList"></ul>
-      </section>
-      <section data-workspaces="animate">
-        <h2>Pose edit layer</h2>
-        <p class="note">Click a joint, rotate it with the ring. The change blends in and out over the falloff so the capture detail stays.</p>
-        <div class="row"><span class="tag" id="selBone">no joint</span></div>
-        <div class="row"><label>Falloff <input type="number" id="falloff" value="12" min="1" max="120"> f</label><button id="delKey">Remove key here</button><button id="clearBone">Clear joint</button></div>
-        <p class="note">Animation layers key Euler curves with Maya tangents and blend like Maya's layer stack. With a layer active, the ring keys into it instead of the pose layer.</p>
-        <div class="row"><label>Active <select id="animActive" aria-label="Active animation layer"><option value="-1">pose layer</option></select></label><button id="animAdd">Add layer</button><button id="animDel">Delete layer</button></div>
-        <div class="row"><label>Weight <input type="number" id="animWeight" value="1" step="0.05" min="0" max="1"></label><label><input type="checkbox" id="animMute"> Mute</label><label><input type="checkbox" id="animOverride"> Override</label></div>
-        <div class="row"><label>Rotation <select id="animAccum" aria-label="Rotation accumulation"><option value="layer">by layer</option><option value="component">by component</option></select></label><label>Tangent <select id="animTangent" aria-label="Default tangent"><option>auto</option><option>autoease</option><option>automix</option><option>spline</option><option>clamped</option><option>plateau</option><option>linear</option><option>flat</option><option>step</option></select></label></div>
-        <div class="row"><label>Mask <select id="animMask"><option value="all">All joints</option><option value="upperbody">Upper body</option><option value="lowerbody">Lower body</option><option value="arms">Arms</option><option value="legs">Legs</option></select></label></div>
-      </section>
-      <section data-workspaces="animate rig">
-        <h2>Animator rig</h2>
-        <p class="note">Named body and finger controls key the existing animation. Hands and feet also offer a pose-preserving IK mode: switching modes does not move the skeleton; an IK key is created only when you apply a target.</p>
-        <div class="row"><label>Control <select id="rigControl" aria-label="Animator control"></select></label><label>Mode <select id="rigMode" aria-label="Control mode"><option value="fk">FK rotate</option><option value="ik">IK position</option></select></label><button id="rigKeyFk">Key FK</button></div>
-        <div class="row"><label>IK X cm <input id="rigX" type="number" value="0" step="1"></label><label>Y cm <input id="rigY" type="number" value="0" step="1"></label><label>Z cm <input id="rigZ" type="number" value="0" step="1"></label></div>
-        <div class="row"><label>Pole X cm <input id="rigPoleX" type="number" value="0" step="1"></label><label>Y cm <input id="rigPoleY" type="number" value="0" step="1"></label><label>Z cm <input id="rigPoleZ" type="number" value="0" step="1"></label><label>Blend <input id="rigBlend" type="number" value="1" min="0" max="1" step="0.1"></label><button id="rigApplyIk">Apply IK key</button></div>
-        <p class="note" id="rigInfo"></p>
-      </section>
-      <section data-workspaces="rig physics">
-        <h2>Contacts</h2>
-        <p class="note">Shift-drag the timeline to pick frames, then lock a foot to the ground there.</p>
-        <div class="row"><button id="lockL">Lock left foot</button><button id="lockR">Lock right foot</button><button id="autoLocks">Auto-detect plants</button><button id="groundRange">Ground feet in selection</button><button id="footRoll">Foot roll</button></div>
-        <div class="row"><label>Footsteps <input type="number" id="fsSpeed" value="4" step="0.5" min="0.5" max="9"> m/s</label><label>Balance <input type="number" id="fsBalance" value="0" step="0.25" min="0" max="2"></label><button id="footstepsSel">Biped footsteps in selection</button></div>
-        <div class="row"><label>Contact size <input type="number" id="contactSize" value="100" step="10" min="1" max="1000"> % (markers only)</label><label><input type="checkbox" id="showMarkers"> Show sole markers</label></div>
-        <div class="row"><label><input type="checkbox" id="levelOn"> Level feet</label><label><input type="checkbox" id="floorOn"> Floor contact on plants</label><button id="floorRange">Floor contact in selection</button></div>
-        <p class="note" id="floorInfo"></p>
-        <ul class="list" id="plantInfo"></ul>
-        <ul class="list" id="lockList"></ul>
-      </section>
-      <section data-workspaces="rig">
-        <h2>Support hand</h2>
-        <p class="note">Captures the left hand's grip relative to the right hand at the current frame and holds it over the selected frames.</p>
-        <div class="row"><button id="pinHand">Pin left hand to grip</button><button id="pinWorld">Pin left hand in world</button><button id="unpinHand">Remove</button></div>
-        <div class="row"><label><input type="checkbox" id="pullOn"> Pull body to hand</label><label>Pull <input type="number" id="pullAmt" value="1" step="0.1" min="0" max="2"></label><label>Gravity <input type="number" id="pullGravity" value="0.6" step="0.05" min="0" max="1"></label></div>
-        <ul class="list" id="pinList"></ul>
-      </section>
-      <section data-workspaces="animate">
-        <h2>Guided motion</h2>
-        <p class="note">Range-limited generation preserves locked feet and hand/weapon constraints. Suggestions remain editable fixes.</p>
-        <div class="row"><button id="inbetweenSel" class="primary">Pose-guided inbetween · recovered Cascadeur model</button><label>Strength <input id="inbetweenStrength" type="number" value="1" min="0" max="1" step="0.1"></label><label>Style ID <input id="neuralStyle" type="number" value="0" min="0" step="1"></label></div>
-        <div class="row"><label>Spacing <select id="guidedSpacing"><option value="ease">Soft</option><option value="linear">Even</option><option value="heavy">Heavy</option></select></label><label><input id="guidedRoot" type="checkbox" checked>Keep root path</label></div>
-        <div class="row"><button id="assistPose">Suggest pose from motion</button><button id="cascadeurPose">Cascadeur pose inference (explicit guidance)</button><label>Snap vector <input type="text" id="poseSnap" value="0,0,0,0,0,0" aria-label="Explicit pose model snap parameters"></label><label>Spine <input type="number" id="poseSpine" value="0" step="0.1"></label><button id="nextPose">Next suggestion</button><button id="validatePose">Check pose and contacts</button><button id="physicsCleanup">Preview physics cleanup</button></div>
-        <div class="row"><button id="secondarySel">Add secondary motion</button><label>Strength <input id="secondaryStrength" type="number" value="0.3" min="0" max="1" step="0.05"></label><label>Damping <input id="secondaryDamping" type="number" value="0.75" min="0" max="0.98" step="0.05"></label></div>
-        <div class="row"><button id="weaponGrip">Capture two-hand weapon grip</button><label class="button">Import weapon FBX<input id="propIn" type="file" accept=".fbx" hidden></label><label>Length m <input id="propLength" type="number" min="0.05" max="5" step="0.05" value="0.8"></label></div>
-        <div class="row"><button id="guidedAccept">Accept preview</button><button id="guidedReject">Reject preview</button><button id="editUndo">Undo</button><button id="editRedo">Redo</button><button id="recoverEdit">Recover session</button><label><input id="compareSource" type="checkbox">Show source</label></div>
-        <div class="row"><button id="bookmarkPose">Bookmark pose</button><select id="poseBookmarks" aria-label="Pose bookmarks"></select><button id="restorePose">Use pose</button></div>
-        <pre class="log" id="guidedLog" aria-live="polite"></pre>
-      </section>
-      <section data-workspaces="physics">
-        <h2>Physics</h2>
-        <div class="row"><label>Friction μ <input type="number" id="mu" value="0.8" step="0.05" min="0.2" max="1.5"></label><label>Snap °/s <input type="number" id="snapLim" value="900" step="50"></label></div>
-        <div class="row"><button id="fixRange" class="primary">Fix momentum in selection</button><button id="smoothRange">Smooth snaps in selection</button><button id="clearFix">Clear fixes</button></div>
-        <div class="row"><button id="ballistic">Snap to ballistic</button><button id="fulcrums">Add fulcrums</button></div>
-        <div class="row"><button id="despikeRange">Remove pops</button><button id="filterRange">Filter jitter</button><label>Fc <input type="number" id="cleanFc" value="7" step="1" min="1" max="30"> Hz</label><button id="medianRange">Median smooth</button></div>
-        <ul class="list" id="flagList"></ul>
-      </section>
-      <section data-workspaces="review">
-        <h2>Fidelity gate</h2>
-        <div class="row"><label>Limit <input type="number" id="gateLim" value="8" step="1"> °</label></div>
-        <div id="gate" aria-live="polite"></div>
-      </section>
-      <section data-workspaces="review">
-        <h2>Locomotion taste</h2>
-        <p class="note">Splits the take into drill phases (locomotion, flight, plant, slide, kneel, rise, stand) and judges each against real human data with only the rules that make sense for it: gait envelope on locomotion of 30+ frames, no ground-float in flight, no foot-slide in the slide. Pop, shin crossing, freeze and ground sink run on the whole take. Blockers stop the FBX export unless you tick export anyway.</p>
-        <div class="row"><button id="runTaste" class="primary">Judge locomotion</button><label><input type="checkbox" id="tasteAuto" checked> judge after every edit</label><label><input type="checkbox" id="tasteOverride"> export anyway</label></div>
-        <div class="row"><button id="autoFix">Auto Fix</button><span class="note">Judges, plans a fix per blocker, keeps each only if the blocker count drops.</span></div>
-        <pre class="log" id="autoFixLog" aria-live="polite"></pre>
-        <div id="taste" aria-live="polite"></div>
-      </section>
-      <section data-workspaces="export">
-        <h2>Export</h2>
-        <div class="row"><input id="outName" value="FRT_fulcrum" aria-label="Export name"></div>
-        <div class="row"><button id="exportFbx" class="primary">Export FBX for Unreal</button><button id="exportGlb">Save GLB</button><button id="saveProj">Save project</button><label class="file">Open project…<input type="file" id="projIn" accept=".json"></label></div>
-        <pre class="log" id="exportLog" aria-live="polite"></pre>
-      </section>
-    </aside>
+    <span class="spacer"></span>
+    <a href="studio.html" title="Open the animation clean-up studio">Studio</a>
+    <select id="theme" class="btn small" aria-label="Appearance"><option value="system">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select>
+  </header>
+
+  <main class="stage">
+    <section class="pane video-pane" id="videoPane" aria-label="Video">
+      <div class="drop" id="drop">
+        <h2>Drop a video of a person moving</h2>
+        <p>Any MP4 or WebM where the whole body is visible. Walking, running, dancing, fighting moves: Fulcrum turns it into a 3D animation you can play with your keyboard.</p>
+        <div class="row">
+          <label class="btn primary file">Choose video<input type="file" id="videoIn" accept="video/*,.mp4,.mov,.webm,.mkv,.avi"></label>
+          <label class="btn file">Open project<input type="file" id="projectIn" accept=".json"></label>
+        </div>
+        <button type="button" class="btn small" id="demoBtn">No video handy? Try a test walk</button>
+      </div>
+      <video id="video" playsinline muted preload="auto"></video>
+      <canvas id="overlay"></canvas>
+      <div class="pane-label">Video</div>
+    </section>
+    <section class="pane view-pane" id="viewPane" aria-label="3D view">
+      <div id="three" tabindex="0" aria-label="3D view. In play mode use W A S D to move."></div>
+      <div class="hud" id="hud"></div>
+      <div class="keys" id="keys">
+        <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move</span>
+        <span><kbd>Shift</kbd> run</span>
+        <span><kbd>Alt</kbd> slow walk</span>
+        <span><kbd>Space</kbd> jump</span>
+        <span><kbd>E</kbd> first move</span>
+        <span><kbd>1</kbd>–<kbd>9</kbd> moves</span>
+        <span><kbd>R</kbd> replay video</span>
+        <span>drag to look · scroll to zoom</span>
+        <span><kbd>Esc</kbd> stop</span>
+      </div>
+      <div class="pane-label">3D</div>
+    </section>
   </main>
-  <div class="gepanel" id="gePanel" role="region" aria-label="Graph editor" hidden>
-    <div class="gegrip" id="geGrip" title="Drag to resize"></div>
-    <div class="row gehead"><b>Graph editor</b><span class="note" id="geInfo"></span><button id="geKey">Key joint</button></div>
-    <div class="gehost" id="geHost"></div>
-  </div>
-  <div class="tlwrap" role="region" aria-label="Playback timeline">
-    <div class="transport"><button id="play">Play</button><button id="geToggle">Graph editor</button><button id="stepB" aria-label="Previous frame">◀</button><button id="stepF" aria-label="Next frame">▶</button><span id="frameLbl" class="mono"></span><span class="mono dim" id="selLbl"></span></div>
-    <canvas id="tl" role="img" aria-label="Timeline. Click to seek, shift-drag to select frames."></canvas>
-  </div>
+
+  <footer class="timeline" aria-label="Timeline">
+    <div class="tbar">
+      <button type="button" class="btn" id="playBtn" title="Play or pause (Space)" aria-label="Play or pause">▶</button>
+      <span id="timeText">No video</span>
+    </div>
+    <canvas id="tl" aria-label="Scrub through the video"></canvas>
+  </footer>
+
+  <aside class="panel" id="panel">
+    <section data-step="video" class="on">
+      <h3>1. Video</h3>
+      <p class="lead" id="videoLead">Pick a video. Phone clips are fine. Keep the camera still if you can, and the whole body in view.</p>
+      <p class="info" id="videoInfo"></p>
+      <div class="field"><span>Frames per second</span><input type="number" id="fpsIn" min="5" max="240" step="0.001" value="30"></div>
+      <div class="field"><span>Start (s)</span><input type="number" id="trimA" min="0" step="0.1" value="0"></div>
+      <div class="field"><span>End (s)</span><input type="number" id="trimB" min="0" step="0.1" value="0"></div>
+      <div class="row">
+        <label class="btn file">Choose another video<input type="file" id="videoIn2" accept="video/*,.mp4,.mov,.webm,.mkv,.avi"></label>
+        <button type="button" class="btn primary" id="toTrack" disabled>Next: track the person</button>
+      </div>
+    </section>
+
+    <section data-step="track">
+      <h3>2. Track the person</h3>
+      <p class="lead">Fulcrum finds the body in every frame, then rebuilds it in 3D on a skeleton.</p>
+      <div class="field"><span>Quality</span><select id="modelSel"><option value="lite">Fast</option><option value="full" selected>Balanced</option><option value="heavy">Best (slow)</option></select></div>
+      <div class="row"><button type="button" class="btn primary" id="trackBtn" disabled>Track motion</button><button type="button" class="btn" id="cancelBtn" hidden>Cancel</button></div>
+      <div class="progress" id="progress" hidden><i></i></div>
+      <p class="status" id="trackStatus"></p>
+      <p class="info" id="trackInfo"></p>
+      <label class="check"><input type="checkbox" id="fitOn" checked> Show the 3D result over the video</label>
+      <details id="tune">
+        <summary>Fine-tune</summary>
+        <div class="field"><span>Camera lens (field of view)</span><output id="fovOut">60°</output><input type="range" id="fov" min="30" max="120" step="1" value="60"></div>
+        <div class="field"><span>Smoothing</span><output id="smoothOut">6 Hz</output><input type="range" id="smooth" min="2" max="12" step="0.5" value="6"></div>
+        <div class="field"><span>Trust the 2D picture</span><output id="fitOut">0.5</output><input type="range" id="imageFit" min="0" max="1" step="0.05" value="0.5"></div>
+        <div class="field"><span>Person height (cm, blank = guess)</span><input type="number" id="heightIn" min="80" max="230" step="1" placeholder="auto"></div>
+        <label class="check"><input type="checkbox" id="lockOn" checked> Keep feet planted (no sliding)</label>
+        <div class="row"><button type="button" class="btn small" id="camBtn">View from the video camera</button></div>
+      </details>
+      <button type="button" class="btn primary" id="toMoves" disabled>Next: see the moves</button>
+    </section>
+
+    <section data-step="moves">
+      <h3>3. Your moves</h3>
+      <p class="lead">These came out of the video. Click one to preview it. Moves marked <em>made up</em> were not in the video, so Fulcrum filled them in.</p>
+      <ul class="clips" id="clipList"></ul>
+      <button type="button" class="btn primary" id="toPlay" disabled>Next: play it</button>
+    </section>
+
+    <section data-step="play">
+      <h3>4. Play</h3>
+      <p class="lead">Drive the character with the keyboard. The camera follows it; drag to look around.</p>
+      <div class="row"><button type="button" class="btn primary" id="playMode" disabled>Start playing</button></div>
+      <div class="legend" id="legend"></div>
+      <div class="field"><span>Character</span><select id="charSel"><option value="mannequin">Mannequin</option></select></div>
+      <label class="btn file">Load your character (GLB, glTF or FBX)<input type="file" id="charIn" accept=".glb,.gltf,.fbx"></label>
+      <p class="status" id="charStatus"></p>
+    </section>
+
+    <section class="always" id="exportBox">
+      <h3>Export</h3>
+      <div class="row">
+        <button type="button" class="btn" id="glbBtn" disabled>Character + moves (.glb)</button>
+        <button type="button" class="btn" id="bvhBtn" disabled>Full take (.bvh)</button>
+        <button type="button" class="btn" id="saveBtn" disabled>Save project</button>
+      </div>
+      <p class="status" id="exportStatus"></p>
+    </section>
+  </aside>
 </div>
-<script type="module" src="app.js"></script>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="mocap/app.js"></script>
 </body>
 </html>

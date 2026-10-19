@@ -16,9 +16,9 @@ const cam = lookAtCamera([0.3, 1.45, 4.5], [0, 0.85, -0.5], { width: 1280, heigh
 
 function scenario(steps, seed, o = {}) {
   const lib = truthLib(), ctl = createController(lib, { yaw: Math.PI / 2 });
-  ctl.pos = [-3, 0, -0.5];
+  ctl.pos = o.start ?? [-3, 0, -0.5];
   const take = recordTake(ctl, steps.map(s => ({ ...s, input: { ...s.input, camYaw: Math.PI } })), 30);
-  const { capture } = synthCapture(truthSkel, take, cam, { rand: rng(seed), noiseImg: 0.003, noiseWorld: 0.015, occlusion: true, ...o });
+  const { capture } = synthCapture(truthSkel, take, o.cam ?? cam, { rand: rng(seed), noiseImg: 0.003, noiseWorld: 0.015, occlusion: true, ...o });
   return { lib, take, capture };
 }
 
@@ -53,8 +53,10 @@ test('pipeline: a noisy video of idle, walk, idle becomes a measured walk loop, 
 });
 
 test('pipeline: walking then running yields both loops at the right speeds', () => {
-  const { lib, capture } = scenario([{ seconds: 1.5, input: {} }, { seconds: 2, input: { right: true } }, { seconds: 2.5, input: { right: true, run: true } }, { seconds: 1.5, input: {} }], 5);
-  const res = processCapture(capture, { hfov: 60 });
+  const wide = lookAtCamera([0.5, 1.6, 11], [0.5, 0.9, -0.5], { width: 1920, height: 1080, hfov: 72 });
+  const { lib, capture } = scenario([{ seconds: 1.5, input: {} }, { seconds: 2, input: { right: true } }, { seconds: 2.5, input: { right: true, run: true } }, { seconds: 1.5, input: {} }], 5, { cam: wide, start: [-5.5, 0, -0.5], noiseImg: 0.0015 });
+  const res = processCapture(capture, { hfov: 72 });
+  assert.equal(res.n, capture.frames.length, 'the runner stays in view');
   assert.ok(!res.library.walk.procedural && !res.library.run.procedural);
   near(res.library.walk.speed, lib.walk.speed, 0.12, 'walk');
   near(res.library.run.speed, lib.run.speed, 0.25, 'run');

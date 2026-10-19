@@ -39,7 +39,7 @@ export function processCapture(capture, settings = {}) {
   const found = findPlants(skel, take, fps);
   const lock = s.footLock ? lockFeet(skel, take, fps, found) : null;
   const plants = lock?.plants ?? found, skate = footSkate(skel, take, fps, plants);
-  const built = buildClips(skel, take, fps, plants, s);
+  const built = buildClips(skel, take, fps, plants, s.clips ?? {});
   const library = completeLibrary(skel, take, fps, built.clips, s);
   const camera = { focal: cam.focal, width: cam.width, height: cam.height, q: tf.q, offset: tf.offset, height_m: -tf.offset * scale, hfov: s.hfov, scale };
   return {
@@ -58,9 +58,9 @@ export function completeLibrary(skel, take, fps, clips, o = {}) {
     setQ(base, 0, qmul(qyaw(-Math.atan2(f[0], f[2])), getQ(base, 0)));
   }
   const rootY = stand?.still ? getV(take.root, stand.frame)[1] : skel.rest[0][1] - 0.005;
-  if (!lib.idle) lib.idle = { ...idleClip(skel, { fps, local: base, root: [0, rootY, 0] }), name: 'Idle (made up)' };
-  if (!lib.walk) lib.walk = { ...gaitClip(skel, { kind: 'walk', fps, speed: lib.run ? Math.min(1.4, lib.run.speed * 0.45) : defaultSpeed(skel, 'walk') }), name: 'Walk (made up)' };
-  if (!lib.run) lib.run = { ...gaitClip(skel, { kind: 'run', fps, speed: Math.max(defaultSpeed(skel, 'run'), lib.walk.speed * 2.2) }), name: 'Run (made up)' };
-  if (!lib.jump) lib.jump = { ...jumpClip(skel, { fps, local: base, root: [0, rootY, 0] }), name: 'Jump (made up)' };
+  if (!lib.idle) lib.idle = { ...idleClip(skel, { fps, local: base, root: [0, rootY, 0] }), name: 'Idle' };
+  if (!lib.walk) lib.walk = { ...gaitClip(skel, { kind: 'walk', fps, speed: lib.run ? Math.min(1.4, lib.run.speed * 0.45) : defaultSpeed(skel, 'walk') }), name: 'Walk' };
+  if (!lib.run) lib.run = { ...gaitClip(skel, { kind: 'run', fps, speed: Math.max(defaultSpeed(skel, 'run'), lib.walk.speed * 2.2) }), name: 'Run' };
+  if (!lib.jump) lib.jump = { ...jumpClip(skel, { fps, local: base, root: [0, rootY, 0] }), name: 'Jump' };
   return lib;
 }

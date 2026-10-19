@@ -168,7 +168,7 @@ function closeGaps(mask, gap) {
 }
 
 export function segmentTake(take, fps, o = {}) {
-  const v = rootVelocity(take, fps, o.fc ?? 1), n = take.n, minLen = Math.round(0.4 * fps);
+  const v = rootVelocity(take, fps, o.velocityFc ?? 1), n = take.n, minLen = Math.round(0.4 * fps);
   let moving = Array.from(v.speed, s => s > (o.moveSpeed ?? 0.35) ? 1 : 0);
   moving = closeGaps(moving, Math.round(0.3 * fps));
   const still = closeGaps(moving.map(x => 1 - x), Math.round(0.3 * fps));
@@ -225,22 +225,29 @@ export function motionEnergy(take, TW, a, b, fps, o = {}) {
 }
 
 export function findJumps(skel, take, TW, fps, o = {}) {
-  const { air, lowest } = airFrames(skel, take, TW, o), out = [];
+  const { air, lowest } = airFrames(skel, take, TW, o), out = [], n = take.n, w = Math.round(fps * 0.6), edge = Math.round(fps * (o.edgeSec ?? 0.25));
   for (const [a, b] of runs(Array.from(air))) {
     const dur = (b - a + 1) / fps;
-    if (dur < (o.minAir ?? 0.16)) continue;
+    if (dur < (o.minAir ?? 0.16) || a < edge || b > n - 1 - edge) continue;
     const peak = Math.max(...Array.from(lowest.subarray(a, b + 1)));
     if (peak < (o.minHeight ?? 0.1)) continue;
-    out.push({ a, b, air: dur, height: peak });
+    const base = [];
+    for (let i = Math.max(0, a - w); i <= Math.min(n - 1, b + w); i++) if (i < a || i > b) base.push(take.root[i * 3 + 1]);
+    base.sort((x, y) => x - y);
+    let top = -Infinity;
+    for (let i = a; i <= b; i++) top = Math.max(top, take.root[i * 3 + 1]);
+    const rise = base.length ? top - base[base.length >> 1] : 0;
+    if (rise < (o.minRise ?? 0.08)) continue;
+    out.push({ a, b, air: dur, height: peak, rise });
   }
   return out;
 }
 
 export function classifyLoop(skel, clip) {
   const TW = takeWorld(skel, clip), { air } = airFrames(skel, clip, TW);
-  const flight = air.reduce((s, x) => s + x, 0) / clip.n;
-  const kind = clip.speed < 0.3 ? 'idle' : flight > 0.06 || clip.speed > 2.4 ? 'run' : 'walk';
-  return { kind, flight };
+  const flight = air.reduce((s, x) => s + x, 0) / clip.n, v = clip.speed, legs = skel.dims.legLength / 0.9;
+  const run = v > 2.3 * legs || (clip.cycle < 0.85 && v > 1.5 * legs) || (flight > 0.12 && v > 1.7 * legs);
+  return { kind: v < 0.3 ? 'idle' : run ? 'run' : 'walk', flight };
 }
 
 export function buildClips(skel, take, fps, plants, o = {}) {
