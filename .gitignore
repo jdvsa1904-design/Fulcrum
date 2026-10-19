@@ -18,3 +18,5 @@ ue_check/ue_samples_*.json
 ue_check/ue_half_*.json
 
 .claude/settings.local.json
+
+.claude/worktrees/
