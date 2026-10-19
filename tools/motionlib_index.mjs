@@ -14,6 +14,7 @@ import { detectFootPlants } from '../wire/plants.js';
 import { segmentPhases, BONES as PHASE_BONES } from '../phases.js';
 import { GAIT, cycleTime } from '../mocap/gait.js';
 import { LIMITS } from '../mocap/depthsign.js';
+import { forward, stripPrefix, arpAlias, rigFamily } from './motionlib_bvh.mjs';
 
 const args = process.argv.slice(2);
 const flag = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
@@ -30,11 +31,6 @@ const TH = Object.freeze({
 });
 
 // ---------- math ----------
-const qmul = (a, b) => [a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1], a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
-  a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3], a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]];
-const qrot = (q, v) => { const [x, y, z, w] = q, ix = w * v[0] + y * v[2] - z * v[1], iy = w * v[1] + z * v[0] - x * v[2], iz = w * v[2] + x * v[1] - y * v[0], iw = -x * v[0] - y * v[1] - z * v[2];
-  return [ix * w + iw * -x + iy * -z - iz * -y, iy * w + iw * -y + iz * -x - ix * -z, iz * w + iw * -z + ix * -y - iy * -x]; };
-const qaxis = (ax, deg) => { const h = deg / D / 2, s = Math.sin(h); return ax === 'X' ? [s, 0, 0, Math.cos(h)] : ax === 'Y' ? [0, s, 0, Math.cos(h)] : [0, 0, s, Math.cos(h)]; };
 const qang = (a, b) => { const d = Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]); return 2 * Math.acos(Math.min(1, d)) * D; };
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const len = a => Math.hypot(a[0], a[1], a[2]);
@@ -48,56 +44,6 @@ const r2 = v => Number.isFinite(v) ? +v.toFixed(2) : null, r3 = v => Number.isFi
 const runsOf = (mask, minLen = 1) => { const out = []; let s = -1; for (let i = 0; i <= mask.length; i++) { if (i < mask.length && mask[i]) { if (s < 0) s = i; } else if (s >= 0) { if (i - s >= minLen) out.push([s, i - 1]); s = -1; } } return out; };
 const wrap = a => { while (a > 180) a -= 360; while (a < -180) a += 360; return a; };
 
-// ---------- bone names ----------
-const stripPrefix = n => n.replace(/^\d{3}_/, '');
-// Auto-Rig Pro deform names -> names rigmap.js already understands. Only used as a second pass.
-function arpAlias(n) {
-  const m = n.match(/^(c_)?(.+?)\.(x|l|r)$/);
-  if (!m) return n;
-  let b = m[2]; const s = m[3];
-  b = b.replace(/_stretch$/, '');
-  const T = { root: 'pelvis', 'spine_01': 'spine_01', 'spine_02': 'spine_02', 'spine_03': 'spine_03', neck: 'neck_01', head: 'head', shoulder: 'clavicle', arm: 'upperarm', forearm: 'lowerarm',
-    thigh: 'thigh', leg: 'calf', foot: 'foot', toes_01: 'ball', hand: 'hand', arm_twist: 'upperarm_twist', forearm_twist: 'lowerarm_twist', leg_twist: 'calf_twist', thigh_twist: 'thigh_twist' };
-  const fm = b.match(/^(thumb|index|middle|ring|pinky)(\d)$/);
-  const base = fm ? `${fm[1]}_0${fm[2]}` : T[b] ?? b;
-  return s === 'x' ? base : `${base}_${s}`;
-}
-
-function rigFamily(names) {
-  if (names.some(n => /mixamorig/i.test(n))) return 'mixamo';
-  if (names.some(n => /\.(x|l|r)$/.test(n))) return 'autorigpro';
-  if (names.includes('pelvis') && names.includes('thigh_l')) return 'ue_mannequin';
-  return 'other';
-}
-
-// ---------- FK ----------
-function forward(bvh, unit) {
-  const J = bvh.joints, nj = J.length, n = bvh.values.length, P = new Float64Array(n * nj * 3), Q = new Float64Array(n * nj * 4), L = new Float64Array(n * nj * 4), T = new Float64Array(n * nj * 3);
-  const cols = []; let c = 0;
-  for (const j of J) { cols.push(c); c += j.channels.length; }
-  let finite = true;
-  for (let f = 0; f < n; f++) {
-    const row = bvh.values[f];
-    for (let i = 0; i < nj; i++) {
-      const j = J[i], t = [...(j.offset ?? [0, 0, 0])];
-      let q = [0, 0, 0, 1];
-      j.channels.forEach((ch, k) => {
-        const v = row[cols[i] + k];
-        if (!Number.isFinite(v)) finite = false;
-        if (ch.endsWith('position')) t['XYZ'.indexOf(ch[0])] += v;
-        else q = qmul(q, qaxis(ch[0], v));
-      });
-      for (let k = 0; k < 3; k++) t[k] *= unit;
-      L.set(q, (f * nj + i) * 4); T.set(t, (f * nj + i) * 3);
-      const p = j.parent;
-      if (p < 0) { P.set(t, (f * nj + i) * 3); Q.set(q, (f * nj + i) * 4); continue; }
-      const pq = Q.subarray((f * nj + p) * 4, (f * nj + p) * 4 + 4), pp = P.subarray((f * nj + p) * 3, (f * nj + p) * 3 + 3), rt = qrot(pq, t);
-      P.set([pp[0] + rt[0], pp[1] + rt[1], pp[2] + rt[2]], (f * nj + i) * 3);
-      Q.set(qmul(pq, q), (f * nj + i) * 4);
-    }
-  }
-  return { P, Q, L, T, n, nj, finite };
-}
 const wp = (fk, f, i) => [fk.P[(f * fk.nj + i) * 3], fk.P[(f * fk.nj + i) * 3 + 1], fk.P[(f * fk.nj + i) * 3 + 2]];
 const lq = (fk, f, i) => Array.from(fk.L.subarray((f * fk.nj + i) * 4, (f * fk.nj + i) * 4 + 4));
 const lt = (fk, f, i) => Array.from(fk.T.subarray((f * fk.nj + i) * 3, (f * fk.nj + i) * 3 + 3));

@@ -28,6 +28,7 @@ import { applyStoryBlends, cutIndex, insertIndex } from './wire/story.js';
 import { contactGizmoScale, gizmoFootMarkers } from './re/hik/contact.js';
 import { applyAdvancedMotion, assistedPose, validatePose } from './advanced.js';
 import { suggestPoses } from './poseassist.js';
+import { decodeBank, calibrateTakeRig, studioWorld, studioLocal, canonFrames, canonPose, contextFloor, frameContext, matrixPositions, bankInbetween } from './wire/posebank.js';
 import { parsePoseModel, predictNextPose } from './wire/posemodel.js';
 import { buildControlRig, sampleControlRig, controlMotionToLocalQuaternions } from './wire/cascadeur_rig.js';
 import { retimeMapFrame, retimeTracks } from './wire/timeline.js';
@@ -2192,19 +2193,70 @@ function learnedSuggestion() {
   const pose = predictNextPose(learnedPoseModel, { p: pelvisTrack(), q: S.out.q, nb: S.body.bones.length, n: S.take.n, f: S.frame, fps: S.take.fps });
   return { pose, sourceFrame: S.frame, guidanceErrorDeg: 0, uncertaintyDeg: 0, confidence: 0, preserved: [], source: 'learned' };
 }
-function poseSuggestion(index=0){
+// Motion-library pose bank (wire/pose_bank.*, built by tools/motionlib_posebank.mjs): fetched on first use only.
+let poseBankLoad=null;
+function loadPoseBank(){
+  const get=(u,k)=>fetch(u).then(r=>{if(!r.ok)throw new Error(`${u} not found (${r.status})`);return r[k]();});
+  return poseBankLoad??=Promise.all([get('/wire/pose_bank.json','json'),get('/wire/pose_bank.bin','arrayBuffer')]).then(([m,b])=>decodeBank(m,b)).catch(e=>{poseBankLoad=null;throw e;});
+}
+// The studio skeleton's canonical bone frames, calibrated once per take from its own motion.
+function studioBankRig(){
+  if(S.bankRig?.take===S.take&&S.bankRig.body===S.body)return S.bankRig;
+  const B=S.body,nb=B.bones.length,names=B.rig?.map||{};
+  const lookup=k=>{const i=B.byKey.get(k);if(i!==undefined)return i;return names[k]?B.bones.findIndex(b=>b.name===names[k]):-1;};
+  const above=B.bones.map(b=>(b.parent?b.parent.getWorldQuaternion(new THREE.Quaternion()):new THREE.Quaternion()).toArray()),rootParentQ=i=>above[i],parents=B.parentIdx;
+  const rig=calibrateTakeRig({lookup,q:S.out.q,W:S.out.W,nb,n:S.take.n,parents,rootParentQ});
+  return S.bankRig={take:S.take,body:B,rig,parents,rootParentQ};
+}
+function bankFrame(br,f){
+  const nb=S.body.bones.length,pos=matrixPositions(S.out.W,nb,S.upm),W=studioWorld(S.out.q,nb,f,br.parents,br.rootParentQ),c=canonPose(canonFrames(br.rig,i=>W[i]),br.rig.anc);
+  return {...c,context:frameContext({pos,n:S.take.n,fps:S.take.fps,rig:br.rig,f,yaw:c.yaw,floor:contextFloor({pos,n:S.take.n,rig:br.rig})})};
+}
+async function poseSuggestion(index=0){
   if(!S.out)return;
   if(!S.poseSuggestions){
     const guides=[...S.layer.keys()];if(S.selBone>=0)guides.push(S.selBone);
-    const preserve=S.pins.length?['hand_l','hand_r'].map(idx).filter(i=>i!==undefined):[];
-    S.poseSuggestions=suggestPoses({source:S.take.q,current:S.out.q,nb:S.body.bones.length,n:S.take.n,f:S.frame,guides:[...new Set(guides)],preserve});S.poseSuggestionFrame=S.frame;
+    const preserve=S.pins.length?['hand_l','hand_r'].map(idx).filter(i=>i!==undefined):[],f=S.frame;
+    let library=null,note='';
+    try{const bank=await loadPoseBank(),br=studioBankRig();library={bank,rig:br.rig,parents:br.parents,rootParentQ:br.rootParentQ,context:bankFrame(br,f).context};}
+    catch(e){note=` The motion library could not be used (${e.message}), so only this take was searched.`;}
+    S.poseSuggestions=suggestPoses({source:S.take.q,current:S.out.q,nb:S.body.bones.length,n:S.take.n,f,guides:[...new Set(guides)],preserve,library});S.poseSuggestionFrame=f;S.poseSuggestions.note=note;
   }
-  const learned=learnedSuggestion();const rows=learned?[learned,...S.poseSuggestions.suggestions]:S.poseSuggestions.suggestions;if(!rows.length){$('guidedLog').textContent=S.poseSuggestions.reason;return;}
+  const P=S.poseSuggestions,learned=learnedSuggestion();const rows=learned?[learned,...P.suggestions]:P.suggestions;if(!rows.length){$('guidedLog').textContent=P.reason;return;}
   if(EDITS.preview)rejectPreview();
   beginPreview('Pose suggestion');S.poseSuggestionIndex=index%rows.length;
   const row=rows[S.poseSuggestionIndex];
-  S.animLayers.push(posePreviewLayer('Motion pose suggestion',row.pose,S.body.bones.map(b=>b.name),S.poseSuggestionFrame,row.preserved));rebuild();renderAnimLayers();
-  $('guidedLog').textContent=`Preview ${S.poseSuggestionIndex+1}/${rows.length}, learned from ${S.poseSuggestions.trainingFrames} frames of this take. Guidance error ${row.guidanceErrorDeg.toFixed(1)}°, confidence ${(row.confidence*100).toFixed(0)}%. Accept or reject. This uses a motion-library statistical prior.`;
+  S.animLayers.push(posePreviewLayer(row.source==='library'?`Library pose: ${row.clip}`:'Motion pose suggestion',row.pose,S.body.bones.map(b=>b.name),S.poseSuggestionFrame,row.preserved));rebuild();renderAnimLayers();
+  const from=row.source==='library'?`from the motion library clip "${row.clip}" (${String(row.category).replace(/_/g,' ')}), frame ${row.clipFrame}`:row.source==='learned'?'from the learned pose model':`from frame ${row.sourceFrame} of this take`;
+  const searched=P.libraryFrames?`Searched ${P.trainingFrames} frames of this take and ${P.libraryFrames} poses from ${P.libraryClips} library clips.`:`Searched ${P.trainingFrames} frames of this take.`;
+  $('guidedLog').textContent=`Suggestion ${S.poseSuggestionIndex+1} of ${rows.length}, ${from}. The joints you guided match within ${row.guidanceErrorDeg.toFixed(1)}°; confidence ${(row.confidence*100).toFixed(0)}%. Accept or reject. ${searched}${P.libraryReason?' '+P.libraryReason:''}${P.note||''}`;
+}
+// Library inbetween: the library segment whose start and end poses best match the selection's keys, time-warped to
+// the gap and displacement-blended so it meets both keys; previewed as a guided layer like the neural inbetween.
+async function libraryInbetween(){
+  if(!S.take||!S.sel||S.sel[1]-S.sel[0]<2)throw new Error('Select at least three frames bounded by clean key poses.');
+  const [a,b]=S.sel,nb=S.body.bones.length,n=S.take.n,bank=await loadPoseBank(),br=studioBankRig(),A=bankFrame(br,a),B=bankFrame(br,b);
+  const res=bankInbetween(bank,{LA:A.L,LB:B.L,yawA:A.yaw,yawB:B.yaw,anc:br.rig.anc,ctxA:A.context,ctxB:B.context,seconds:(b-a)/S.take.fps,present:br.rig.idx.map(i=>i>=0)}),seg=res.segments[0];
+  if(!seg)throw new Error('No motion library segment fits this gap.');
+  const frames=res.frames(b-a-1,seg),baseline=S.out.q.slice(),target=baseline.slice();
+  for(let j=1;j<b-a;j++)target.set(studioLocal(br.rig,frames[j-1].F,baseline,nb,a+j,br.parents,br.rootParentQ),(a+j)*nb*4);
+  const names=S.body.bones.map(x=>x.name),bones={},falloff=Math.max(1,+$('falloff').value||12);
+  const delta=(f,bi)=>{const off=(f*nb+bi)*4,d=new THREE.Quaternion().fromArray(baseline,off).invert().multiply(new THREE.Quaternion().fromArray(target,off)).normalize();return d;};
+  for(let bi=0;bi<nb;bi++){
+    const inner=[];for(let f=a+1;f<b;f++){const d=delta(f,bi);if(d.angleTo(new THREE.Quaternion())>1e-5){const eu=new THREE.Euler().setFromQuaternion(d);inner.push({f,e:[eu.x,eu.y,eu.z].map(x=>x*180/Math.PI),tangent:'linear'});}}
+    if(!inner.length)continue;
+    const map=new Map([0,n-1,a,b,Math.max(0,a-falloff),Math.min(n-1,b+falloff)].map(f=>[f,{f,e:[0,0,0],tangent:'flat'}]));
+    for(const r of inner)map.set(r.f,r);
+    bones[names[bi]]=[...map.values()].sort((x,y)=>x.f-y.f);
+  }
+  if(!Object.keys(bones).length)throw new Error('The library segment matches the current motion; nothing to change.');
+  const preserve=[...new Set(S.pins.flatMap(p=>[p.driver,p.driven].filter(Boolean)))];
+  beginPreview('Motion library inbetween');
+  S.animLayers.push(normalizeLayer({name:`Library inbetween: ${seg.clipName}`,weight:Math.max(0,Math.min(1,+$('inbetweenStrength').value||0)),override:false,accumulation:'layer',bones,guidedRange:[a,b],guidedModel:'motion-library',guidedSource:{clip:seg.clipFile,name:seg.clipName,start:seg.startFrame,end:seg.endFrame}}));
+  S.fixes.push({type:'inbetween',a,b,strength:0,preserve,preserveRoot:true,spacing:'library',model:'motion-library',source:seg.clipFile,contactTargets:S.locks.filter(l=>l.b>=a&&l.a<=b).map(l=>({side:l.side,a:Math.max(l.a,a),b:Math.min(l.b,b),target:l.target.slice(),targetQ:l.targetQ.slice(),required:true}))});
+  rebuild();renderAnimLayers();
+  const alt=res.segments.slice(1).map(s=>`"${s.clipName}"`).join(', ');
+  $('guidedLog').textContent=`Library inbetween preview for f${a}–${b}: motion from the clip "${seg.clipName}" (${String(seg.category).replace(/_/g,' ')}), its frames ${seg.startFrame}–${seg.endFrame} played at ${Math.round(100*seg.warp)}% speed to fill the gap, then bent to land exactly on your two key poses (they matched within ${seg.poseErrorDeg.toFixed(1)}° before bending). The root path is kept. Accept or reject.${alt?` Other close clips: ${alt}.`:''}`;
 }
 
 function setSimpleLayerMask(layer, mask) {
@@ -2334,7 +2386,8 @@ $('recoverEdit').onclick=async()=>{const saved=initialRecovery||JSON.parse(local
 $('compareSource').onchange=e=>{S.compareSource=e.target.checked;showFrame(S.frame);};
 $('bookmarkPose').onclick=()=>{if(!S.out)return;const before=editSnapshot(),nb=S.body.bones.length;S.bookmarks.push({name:'Pose f'+S.frame,names:S.body.bones.map(b=>b.name),q:Array.from(S.out.q.subarray(S.frame*nb*4,(S.frame+1)*nb*4))});recordEdit(before);};
 $('restorePose').onclick=()=>{const p=S.bookmarks[+$('poseBookmarks').value];if(!p)return;beginPreview('Bookmarked pose');S.animLayers.push(posePreviewLayer(p.name,p.q,p.names,S.frame));rebuild();};
-$('nextPose').onclick=()=>poseSuggestion((S.poseSuggestionIndex||0)+1);
+const poseSuggestionUI=i=>poseSuggestion(i).catch(e=>{$('guidedLog').textContent='Pose suggestion failed: '+e.message;});
+$('nextPose').onclick=()=>poseSuggestionUI((S.poseSuggestionIndex||0)+1);
 $('propIn').onchange=async e=>{
   const file=e.target.files[0];if(!file||!S.body)return;
   const bytes=await file.arrayBuffer(),obj=parseFBX(bytes),box=new THREE.Box3().setFromObject(obj),size=box.getSize(new THREE.Vector3()),length=+$('propLength').value||.8,scale=length*S.upm/Math.max(size.x,size.y,size.z,1e-6);
@@ -2342,13 +2395,14 @@ $('propIn').onchange=async e=>{
   const id=crypto.randomUUID(),prop={id,name:file.name,driver:'hand_r',length,offset:new THREE.Matrix4().identity().toArray(),source:'prop_'+file.name,scale,mass:3.5};S.props.push(prop);obj.scale.multiplyScalar(scale);obj.position.set(0,0,0);const group=new THREE.Group();group.add(obj);group.matrixAutoUpdate=false;group.userData.propId=id;propGroup.add(group);rebuild();$('guidedLog').textContent='Attached '+file.name+' to the right hand. Capture the two-hand grip at the desired pose.';e.target.value='';
 };
 $('inbetweenSel').onclick=async()=>{try{await neuralInbetween(+$('neuralStyle').value||0);}catch(e){$('guidedLog').textContent='Recovered neural inbetween unavailable: '+e.message;}};
+$('libraryInbetween').onclick=async()=>{try{await libraryInbetween();}catch(e){$('guidedLog').textContent='Motion library inbetween unavailable: '+e.message;}};
 $('validatePose').onclick = () => {
   if (!S.out) return;
   const r=validatePose({q:S.out.q,reference:S.base.q,nb:S.body.bones.length,f:S.frame,names:S.body.bones.map(b=>b.name),limits:{calf:165,lowerarm:165,neck:100}});
   $('guidedLog').textContent=(r.valid?'Pose passes relative-rotation checks.':r.issues.map(x=>`${x.bone}: ${x.angle}° > ${x.limit}°`).join('\n'))+`\nContact error max ${S.motionQuality.constraintMaxCm.toFixed(2)} cm; ${S.motionQuality.failedConstraints} required constraints over 3 cm. Ground/bone findings: ${S.motionQuality.findings.length}.`;
 };
 $('assistPose').onclick = () => {
-  S.poseSuggestions=null;poseSuggestion(0);
+  S.poseSuggestions=null;return poseSuggestionUI(0);
 };
 $('physicsCleanup').onclick = () => {
   if (!S.take) return; const [a,b]=selRange();
@@ -2792,7 +2846,7 @@ function summaryState() {
 const API = {
   status: async () => summaryState(),
   guided_motion:async({action,options={}})=>{
-    const ids={inbetween:'inbetweenSel',suggest_pose:'assistPose',cascadeur_pose:'cascadeurPose',next_pose:'nextPose',physics:'physicsCleanup',secondary:'secondarySel',weapon_grip:'weaponGrip',accept:'guidedAccept',reject:'guidedReject',undo:'editUndo',redo:'editRedo',validate:'validatePose',bookmark:'bookmarkPose'};
+    const ids={inbetween:'inbetweenSel',library_inbetween:'libraryInbetween',suggest_pose:'assistPose',cascadeur_pose:'cascadeurPose',next_pose:'nextPose',physics:'physicsCleanup',secondary:'secondarySel',weapon_grip:'weaponGrip',accept:'guidedAccept',reject:'guidedReject',undo:'editUndo',redo:'editRedo',validate:'validatePose',bookmark:'bookmarkPose'};
     if(!ids[action])throw new Error('Unknown guided motion action: '+action);
     for(const [key,id]of Object.entries({strength:'inbetweenStrength',spacing:'guidedSpacing',secondaryStrength:'secondaryStrength',damping:'secondaryDamping',style:'neuralStyle',poseSnap:'poseSnap',poseSpine:'poseSpine'}))if(options[key]!=null)$(id).value=options[key];
     if(options.preserveRoot!=null)$('guidedRoot').checked=!!options.preserveRoot;
