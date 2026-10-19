@@ -9,6 +9,7 @@ outputs/
 work/
 vendor/
 *.log
+!tools/depth_benchmark.log
 
 ue_check/DerivedDataCache/
 ue_check/Intermediate/
