@@ -111,6 +111,7 @@ async function loadVideoFile(file) {
   if (S.tracking) S.abort?.abort();
   resetResult();
   $('videoPane').classList.add('has-video');
+  $('videoPane').classList.remove('points-only');
   $('videoInfo').textContent = 'Opening ' + file.name + '…';
   let meta = null;
   if (/\.(mp4|m4v|mov|3gp)$/i.test(file.name)) meta = await probeMp4(file).catch(() => null);
@@ -553,7 +554,7 @@ function drawTimeline() {
   g.fillStyle = css('--fg');
   g.fillRect(X(S.frame) - dpr, 0, 2 * dpr, H);
   const t = S.frame / fps(), T = n / fps();
-  $('timeText').textContent = `${fmtTime(t)} / ${fmtTime(T)} · frame ${S.frame + 1} of ${n}` + (res ? `   ·   blue/orange ticks: left/right foot planted` : '');
+  $('timeText').innerHTML = `${fmtTime(t)} / ${fmtTime(T)} · frame ${S.frame + 1} of ${n}` + (res ? `<span class="hint"> · blue/orange ticks: left/right foot planted</span>` : '');
 }
 const fmtTime = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
 
@@ -654,6 +655,7 @@ $('projectIn').addEventListener('change', e => { const f = e.target.files[0]; e.
 function loadCaptureOnly(capture, settingsIn = {}) {
   video.removeAttribute('src');
   video.load();
+  $('videoPane').classList.add('points-only');
   S.video = null;
   resetResult();
   S.capture = capture;

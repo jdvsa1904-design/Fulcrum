@@ -1,5 +1,4 @@
 const RATES = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 90, 100, 119.88, 120, 240];
-const CONTAINERS = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl', 'edts']);
 
 const fourcc = (v, o) => String.fromCharCode(v.getUint8(o), v.getUint8(o + 1), v.getUint8(o + 2), v.getUint8(o + 3));
 
@@ -32,7 +31,7 @@ export function snapRate(fps) {
 }
 
 export function parseMoov(buffer) {
-  const view = new DataView(buffer), root = { body: 0, end: buffer.byteLength };
+  const view = new DataView(buffer);
   const moov = [...boxes(view, 0, buffer.byteLength)].find(b => b.type === 'moov') ?? (fourcc(view, 4) === 'moov' ? { body: 8, end: buffer.byteLength } : null);
   if (!moov) return null;
   for (const trak of find(view, moov, ['trak'])) {

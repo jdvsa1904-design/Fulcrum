@@ -1,4 +1,4 @@
-import { add, sub, scale, dot, cross, len, norm, qmul, qconj, qrot, qaxis, qyaw, qslerp, frameRotation, clamp, lerp, smoothstep } from './math.js';
+import { add, sub, scale, dot, cross, len, norm, qmul, qrot, qaxis, qyaw, qslerp, frameRotation, clamp, lerp, smoothstep } from './math.js';
 import { B, NB, SIDES, getQ, setQ, worldToLocal, standLocal } from './skeleton.js';
 import { LEG_REST } from './solve.js';
 import { lockFeet } from './ground.js';
