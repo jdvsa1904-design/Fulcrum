@@ -68,3 +68,4 @@ You can play the built-in mannequin or load your own character (GLB, glTF or FBX
 - Tests: `node tests/mocap_core.test.mjs`, `node tests/mocap_motion.test.mjs`, `node tests/mocap_pipeline.test.mjs`. The pipeline tests film a synthetic person with a virtual camera, add tracker-like noise, and check the rebuilt motion against the truth.
 - `python tools/fetch_vendor.py` downloads the browser libraries by hand; `--check` reports what is there.
 - `tools/glb_to_fbx.py` is the Blender script behind the FBX export.
+- The studio no longer uses the separate LocomotionTaste program; it was removed. Its Auto Fix now uses Fulcrum's own checks.

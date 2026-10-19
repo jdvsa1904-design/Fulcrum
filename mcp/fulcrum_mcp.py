@@ -154,14 +154,8 @@ def retime(scale: float) -> dict:
 
 
 @mcp.tool()
-def judge() -> dict:
-    """Run the per-phase locomotion taste judge on the current output; returns verdict, phases and findings."""
-    return call("judge")
-
-
-@mcp.tool()
 def auto_fix(max_rounds: int = 4) -> dict:
-    """Run the Auto Fix loop: judge with the locomotion taste, plan one fix per blocker (ground, floor, despike, foot locks, level, smooth, travel toe/pitch), apply each through fixes/locks + rebuild and keep it only if blockers (then warnings) drop. Returns start/end blocker counts, kept and reverted changes and the final state."""
+    """Run the Auto Fix loop: judge with Fulcrum's own checks (physics flags for foot slide, float and pose snaps; motion quality for feet below the floor, failed foot locks and hand pins, invalid transforms; sliding foot plants), plan one fix per blocker (ground, floor, despike, foot locks, level, smooth, travel toe/pitch), apply each through fixes/locks + rebuild and keep it only if blockers (then warnings) drop. Returns start/end blocker counts, kept and reverted changes and the final state."""
     return call("auto_fix", timeout=1800, max_rounds=max_rounds)
 
 
@@ -189,13 +183,13 @@ def screenshot(frame: int | None = None, view: str = "side", width: int = 640, h
 
 @mcp.tool()
 def export_fbx(name: str, override: bool = False) -> dict:
-    """Export the current output to exports/<name>.fbx through Blender with the round-trip check. Blocked by locomotion blockers unless override=True."""
+    """Export the current output to exports/<name>.fbx through Blender with the round-trip check. Blocked by motion-quality blockers (failed foot locks or hand pins, invalid transforms) unless override=True."""
     return call("export_fbx", timeout=900, name=name, override=override)
 
 
 @mcp.tool()
 def eval_js(code: str) -> object:
-    """Run JavaScript inside the Fulcrum page for anything the other tools do not cover. The body runs as an async function with S (app state), THREE and api {rebuild, runTaste, showFrame, idx, firstIdx, wpos}; return a JSON-serialisable value."""
+    """Run JavaScript inside the Fulcrum page for anything the other tools do not cover. The body runs as an async function with S (app state), THREE and api {rebuild, autoFix, showFrame, idx, firstIdx, wpos}; return a JSON-serialisable value."""
     return call("eval", code=code)
 
 

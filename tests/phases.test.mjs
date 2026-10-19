@@ -1,36 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import { BONES, boneIndices, tasteInput, summarize, segmentPhases, phasePlan, phasedTasteInput, groupByPhase, mergeShort, INTEGRITY_RULES, ENVELOPE_MIN_FRAMES, markInPlace, phaseRules } from '../tastebridge.js';
+import { BONES, boneIndices, phaseInput, segmentPhases, mergeShort, markInPlace } from '../phases.js';
 
 const mat = (x, y, z) => { const m = new Array(16).fill(0); m[0] = m[5] = m[10] = m[15] = 1; m[12] = x; m[13] = y; m[14] = z; return m; };
 
-test('bone mapping reports missing bones and keeps taste order', () => {
+test('bone mapping reports missing bones and keeps phase-input order', () => {
   const have = new Map(BONES.slice(0, 20).map((b, i) => [b, i]));
   const r = boneIndices(k => have.get(k));
   assert.deepEqual(r.missing, BONES.slice(20));
   assert.equal(r.map.length, 20);
 });
 
-test('tasteInput converts Y-up metres-scale units to Z-up centimetres with (x,-z,y)', () => {
+test('phaseInput converts Y-up metres-scale units to Z-up centimetres with (x,-z,y)', () => {
   const nb = BONES.length, n = 2, upm = 50, W = new Float32Array(n * nb * 16);
   for (let f = 0; f < n; f++) for (let i = 0; i < nb; i++) { const m = mat(1 + i, 2 + f, 3); W.set(m, (f * nb + i) * 16); }
   const map = BONES.map((_, i) => i), restW = BONES.map((_, i) => mat(i, 0, 0));
-  const t = tasteInput({ W, nb, n, fps: 24, upm, map, restW });
+  const t = phaseInput({ W, nb, n, fps: 24, upm, map, restW });
   assert.equal(t.fps, 24);
   assert.equal(t.B.length, 2);
   assert.equal(t.B[1].length, nb);
   assert.deepEqual(t.B[1][0], [2, -6, 6]);
   assert.deepEqual(t.rest[3], [6, 0, 0]);
-  const part = tasteInput({ W, nb, n, fps: 24, upm, map, restW, from: 1, to: 1 });
+  const part = phaseInput({ W, nb, n, fps: 24, upm, map, restW, from: 1, to: 1 });
   assert.equal(part.B.length, 1);
   assert.equal(part.frame_offset, 1);
-});
-
-test('summarize ranks blockers first', () => {
-  const s = summarize({ verdict: 'fail', confidence: 0.6, findings: [{ severity: 'info' }, { severity: 'blocker' }, { severity: 'warn' }] });
-  assert.equal(s.findings[0].severity, 'blocker');
-  assert.equal(s.blockers.length, 1);
 });
 
 const TAKE = new URL('../exports/taste_in.json', import.meta.url);
@@ -110,40 +104,6 @@ test('segmentPhases on the FRT drill export finds slide, kneel, rise in order an
   assert.ok(segs.filter(s => s.phase === 'kneel' || s.phase === 'slide').every(s => s.start >= 140 && s.end <= 215), 'low phases stay inside f140-215');
 });
 
-test('phasePlan picks rules per phase and pads short windows', () => {
-  const phases = [{ phase: 'stand', start: 0, end: 39 }, { phase: 'locomotion', start: 40, end: 99 }, { phase: 'flight', start: 100, end: 114 }, { phase: 'slide', start: 115, end: 124 },
-    { phase: 'kneel', start: 125, end: 174 }, { phase: 'rise', start: 175, end: 189 }, { phase: 'locomotion', start: 190, end: 209 }, { phase: 'stand', start: 210, end: 239 }];
-  const plan = phasePlan(phases, 240), by = i => plan[i];
-  assert.ok(by(1).rules.includes('envelope') && by(1).end - by(1).start + 1 >= ENVELOPE_MIN_FRAMES);
-  assert.ok(!by(6).rules.includes('envelope'), 'locomotion under 30 frames skips the envelope');
-  for (const i of [0, 3, 4, 5, 7]) assert.ok(!by(i).rules.includes('envelope'), plan[i].phase + ' has no envelope');
-  assert.deepEqual(by(2).rules, [], 'flight judges nothing per phase');
-  assert.ok(!by(3).rules.includes('foot_slide') && by(3).rules.includes('ground_float'), 'slide skips foot_slide');
-  for (const p of plan) for (const r of INTEGRITY_RULES) assert.ok(!p.rules.includes(r), 'integrity rules are whole-take only');
-  assert.equal(by(3).to - by(3).from + 1, 15, 'short slide window padded to 15 frames');
-  assert.ok(by(3).from <= 115 && by(3).to >= 124);
-  const kneelContact = by(4).passes.find(p => p.rules.includes('foot_slide'));
-  assert.equal(kneelContact.from, 125, 'contact pass does not reach back into the slide');
-  assert.equal(kneelContact.to, 180, 'contact pass pads 6 frames into the rise');
-  const lastContact = by(7).passes.find(p => p.rules.includes('foot_slide'));
-  assert.ok(lastContact.to === 239 && lastContact.to - lastContact.from + 1 > 60, 'edge contact pass keeps more than 60 frames so clip-edge contacts are skipped like the whole take');
-});
-
-test('phasedTasteInput keeps the taste contract and adds phases and integrity', () => {
-  const d = synthDrill(), body = phasedTasteInput(d);
-  assert.equal(body.B, d.B);
-  assert.equal(body.fps, 24);
-  assert.deepEqual(body.integrity.rules, INTEGRITY_RULES);
-  assert.ok(body.phases.length >= 5 && body.phases.every(p => Array.isArray(p.passes)));
-});
-
-test('groupByPhase files findings under their phase and whole-take findings first', () => {
-  const g = groupByPhase({ verdict: 'fail', phases: [{ phase: 'stand', start: 0, end: 9 }, { phase: 'flight', start: 10, end: 20 }],
-    findings: [{ rule: 'pop', severity: 'blocker', phase_index: 1, scope: 'whole take' }, { rule: 'foot_slide', severity: 'warn', phase_index: 0 }, { rule: 'x', severity: 'info' }] });
-  assert.deepEqual(g.groups.map(x => [x.phase, x.findings.length]), [['whole take', 1], ['stand', 1], ['flight', 1]]);
-  assert.equal(g.summary.blockers.length, 1);
-});
-
 test('markInPlace relabels locomotion only when the pelvis is much slower than the feet', () => {
   const leg = 100, segs = [{ phase: 'locomotion', start: 0, end: 19 }, { phase: 'locomotion', start: 20, end: 39 }, { phase: 'kneel', start: 40, end: 45 }];
   const speed = Array.from({ length: 46 }, (_, f) => f < 20 ? 30 : 180), footSpeed = [Array(46).fill(200), Array(46).fill(150)];
@@ -151,6 +111,5 @@ test('markInPlace relabels locomotion only when the pelvis is much slower than t
   assert.deepEqual(out.map(s => s.phase), ['in_place', 'locomotion', 'kneel']);
   const still = markInPlace([{ phase: 'locomotion', start: 0, end: 9 }], { leg, speed: Array(10).fill(1), footSpeed: [Array(10).fill(10), Array(10).fill(10)] });
   assert.equal(still[0].phase, 'locomotion', 'feet barely moving is not running in place');
-  assert.deepEqual(phaseRules('in_place', 90), ['foot_slide', 'plant_pop', 'ground_float', 'bounce'], 'no gait envelope in place');
 });
 

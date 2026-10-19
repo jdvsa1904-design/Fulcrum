@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planFixes, autoFixLoop, sideOf, score } from '../wire/autofix.js';
+import { planFixes, autoFixLoop, sideOf, score, fulcrumFindings } from '../wire/autofix.js';
 
 const F = (rule, a, b, extra = {}) => ({ rule, body_part: 'left foot', severity: 'blocker', frame_start: a, frame_end: b, phase: 'in_place', ...extra });
 const ctx = { fixes: [], locks: [], n: 300, fps: 24 };
@@ -119,4 +119,35 @@ test('loop respects maxRounds and accepts the {findings} judge shape', async () 
 test('loop with no blockers does nothing', async () => {
   const r = await autoFixLoop({ judge: async () => [F('pop', 1, 1, { severity: 'warning' })], apply: () => {}, n: 300 });
   assert.equal(r.rounds, 0); assert.equal(r.reason, 'clean');
+});
+
+const contactOf = (n, slideL) => ({ per: { l: new Uint8Array(n).fill(1), r: new Uint8Array(n).fill(1) }, speed: { l: Float32Array.from({ length: n }, (_, f) => slideL(f) ? 0.8 : 0), r: new Float32Array(n) } });
+
+test('fulcrumFindings maps Fulcrum flags, motion quality and sliding plants to findings', () => {
+  const flags = [{ kind: 'slide', a: 40, b: 45 }, { kind: 'float', a: 69, b: 77 }, { kind: 'snap', a: 100, b: 100 }, { kind: 'overload', a: 5, b: 9 }];
+  const quality = { findings: [
+    { kind: 'ground-penetration', severity: 'warning', frame: 10, bone: 'foot_r', cm: 3.5 }, { kind: 'ground-penetration', severity: 'warning', frame: 11, bone: 'foot_r', cm: 4.25 },
+    { kind: 'ground-penetration', severity: 'warning', frame: 30, bone: 'foot_r', cm: 3.1 },
+    { kind: 'constraint-residual', severity: 'blocker', frame: 50, bone: 'hand_l', errorCm: 6 }, { kind: 'constraint-residual', severity: 'blocker', frame: 51, bone: 'hand_l', errorCm: 7 },
+  ] };
+  const fs = fulcrumFindings({ flags, quality, slidingPlants: [{ side: 'r', a: 200, b: 210, drift_cm: 12.345 }], contact: contactOf(300, f => f >= 40 && f <= 45) });
+  const pick = r => fs.filter(f => f.rule === r).map(({ rule, severity, frame_start, frame_end, body_part, value }) => [rule, severity, frame_start, frame_end, body_part, value]);
+  assert.deepEqual(pick('foot_slide'), [['foot_slide', 'blocker', 40, 45, 'foot_l', null], ['foot_slide', 'warning', 200, 210, 'foot_r', 12.35]]);
+  assert.deepEqual(pick('ground_float'), [['ground_float', 'blocker', 69, 77, 'feet', null]]);
+  assert.deepEqual(pick('pop'), [['pop', 'blocker', 100, 100, 'whole body', null]]);
+  assert.deepEqual(pick('ground_sink'), [['ground_sink', 'warning', 10, 11, 'foot_r', 4.25], ['ground_sink', 'warning', 30, 30, 'foot_r', 3.1]]);
+  assert.deepEqual(pick('constraint_residual'), [['constraint_residual', 'blocker', 50, 51, 'hand_l', 7]]);
+  assert.equal(fs.length, 7, 'momentum overload has no finding');
+  assert.ok(fs.every(f => 'phase' in f) && fs.findIndex(f => f.severity === 'warning') > fs.findLastIndex(f => f.severity === 'blocker'), 'blockers first');
+  assert.deepEqual(score(fs), { blockers: 4, warnings: 3 });
+});
+
+test('fulcrumFindings leaves the slide side open when both feet slide, and plans the existing fixes', () => {
+  const fs = fulcrumFindings({ flags: [{ kind: 'slide', a: 40, b: 45 }], contact: { per: { l: new Uint8Array(60).fill(1), r: new Uint8Array(60).fill(1) }, speed: { l: new Float32Array(60).fill(1), r: new Float32Array(60).fill(1) } } });
+  assert.equal(fs[0].body_part, 'feet');
+  const p = planFixes(fulcrumFindings({ flags: [{ kind: 'float', a: 69, b: 77 }, { kind: 'snap', a: 100, b: 100 }], quality: { findings: [{ kind: 'ground-penetration', severity: 'warning', frame: 10, bone: 'foot_l', cm: 4 }, { kind: 'constraint-residual', severity: 'blocker', frame: 50, bone: 'foot_l', errorCm: 5 }] }, slidingPlants: [{ side: 'l', a: 20, b: 30 }] }), ctx);
+  assert.deepEqual(p.fixes.map(x => x.type).sort(), ['despike', 'floor', 'ground']);
+  assert.deepEqual(p.locks, [{ side: 'l', a: 20, b: 30 }]);
+  assert.ok(p.notes.some(n => /constraint_residual .*no auto fix/.test(n)));
+  assert.deepEqual(fulcrumFindings(), []);
 });

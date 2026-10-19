@@ -102,6 +102,36 @@ export function score(findings) {
   return { blockers, warnings };
 }
 
+const FLAG_RULES = { slide: 'foot_slide', float: 'ground_float', snap: 'pop' };
+const QUALITY_RULES = { 'ground-penetration': 'ground_sink' };
+const r2 = v => v == null || !Number.isFinite(v) ? null : +v.toFixed(2);
+
+function slideSide(contact, a, b, speed) {
+  if (!contact) return null;
+  const hit = ['l', 'r'].filter(s => { for (let f = a; f <= b; f++) if (contact.per[s][f] && contact.speed[s][f] > speed) return true; return false; });
+  return hit.length === 1 ? hit[0] : null;
+}
+
+export function fulcrumFindings({ flags = [], quality = null, slidingPlants = [], contact = null, slideSpeed = 0.3 } = {}) {
+  const out = [];
+  for (const fl of flags ?? []) {
+    const rule = FLAG_RULES[fl.kind];
+    if (!rule) continue;
+    const side = rule === 'foot_slide' ? slideSide(contact, fl.a, fl.b, slideSpeed) : null;
+    out.push({ rule, severity: 'blocker', frame_start: fl.a, frame_end: fl.b, body_part: side ? `foot_${side}` : rule === 'pop' ? 'whole body' : 'feet', phase: null, value: null });
+  }
+  const open = new Map();
+  for (const q of quality?.findings ?? []) {
+    const rule = QUALITY_RULES[q.kind] ?? String(q.kind).replace(/-/g, '_'), key = `${rule}|${q.bone ?? ''}|${q.severity}`, v = r2(q.cm ?? q.errorCm ?? q.count);
+    const last = open.get(key);
+    if (last && q.frame != null && last.frame_end != null && q.frame - last.frame_end <= 1) { last.frame_end = Math.max(last.frame_end, q.frame); if (v != null) last.value = Math.max(last.value ?? v, v); continue; }
+    const f = { rule, severity: q.severity === 'blocker' ? 'blocker' : 'warning', frame_start: q.frame ?? null, frame_end: q.frame ?? null, body_part: q.bone ?? null, phase: null, value: v };
+    open.set(key, f); out.push(f);
+  }
+  for (const p of slidingPlants ?? []) out.push({ rule: 'foot_slide', severity: 'warning', frame_start: p.a, frame_end: p.b, body_part: `foot_${p.side}`, phase: null, value: r2(p.drift_cm) });
+  return out.sort((x, y) => (x.severity === 'blocker' ? 0 : 1) - (y.severity === 'blocker' ? 0 : 1) || (x.frame_start ?? -1) - (y.frame_start ?? -1));
+}
+
 const better = (s, t) => s.blockers < t.blockers || (s.blockers === t.blockers && s.warnings < t.warnings);
 const asFindings = r => Array.isArray(r) ? r : r?.findings ?? [];
 

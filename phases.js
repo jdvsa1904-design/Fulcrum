@@ -1,7 +1,7 @@
 export const BONES = ['pelvis', 'spine_01', 'spine_03', 'spine_05', 'neck_01', 'head', 'clavicle_l', 'upperarm_l', 'lowerarm_l', 'hand_l',
   'clavicle_r', 'upperarm_r', 'lowerarm_r', 'hand_r', 'thigh_l', 'calf_l', 'foot_l', 'ball_l', 'thigh_r', 'calf_r', 'foot_r', 'ball_r'];
 
-const toTaste = (x, y, z, k) => [x * k, -z * k, y * k];
+const zUpCm = (x, y, z, k) => [x * k, -z * k, y * k];
 
 export function boneIndices(find) {
   const map = [], missing = [];
@@ -12,21 +12,15 @@ export function boneIndices(find) {
   return { map, missing };
 }
 
-export function tasteInput({ W, nb, n, fps, upm, map, restW, from = 0, to = n - 1 }) {
+export function phaseInput({ W, nb, n, fps, upm, map, restW, from = 0, to = n - 1 }) {
   const k = 100 / upm, B = [];
   for (let f = from; f <= to; f++) {
     const row = [];
-    for (const i of map) { const o = (f * nb + i) * 16 + 12; row.push(toTaste(W[o], W[o + 1], W[o + 2], k).map(v => +v.toFixed(3) + 0)); }
+    for (const i of map) { const o = (f * nb + i) * 16 + 12; row.push(zUpCm(W[o], W[o + 1], W[o + 2], k).map(v => +v.toFixed(3) + 0)); }
     B.push(row);
   }
-  const rest = map.map(i => { const m = restW[i]; return toTaste(m[12], m[13], m[14], k).map(v => +v.toFixed(3) + 0); });
+  const rest = map.map(i => { const m = restW[i]; return zUpCm(m[12], m[13], m[14], k).map(v => +v.toFixed(3) + 0); });
   return { fps, B, rest, frame_offset: from };
-}
-
-export function summarize(result) {
-  const sev = { blocker: 0, warn: 1, info: 2 };
-  const f = [...(result.findings || [])].sort((a, b) => (sev[a.severity] ?? 3) - (sev[b.severity] ?? 3));
-  return { verdict: result.verdict, blockers: f.filter(x => x.severity === 'blocker'), findings: f, confidence: result.confidence, unmeasurable: result.unmeasurable || [] };
 }
 
 const PELVIS = 0, CHEST = 3, HAND = [9, 13], THIGH = [14, 18], CALF = [15, 19], FOOT = [16, 20], BALL = [17, 21];
@@ -35,7 +29,7 @@ export const PHASES = ['locomotion', 'in_place', 'flight', 'vault', 'plant', 'sl
 
 export const GAIT_PHASES = ['locomotion', 'in_place'];
 
-export const SEG = { contact: .1, air: .1, flightRise: 1.06, low: .8, plantDip: .9, riseBelow: .95, kneeLow: .25, rise: .35, drop: .35, slide: .6, footStill: .3, minLen: 6, minFlight: 4, pad: 6, gravity: 981, airSlack: 1.5, airMargin: 0.1, inPlaceRatio: 0.35, inPlaceFoot: 0.5, proneLow: 0.55, proneTilt: 55, handLow: 0.6, armActive: 0.5, straight: 0.5, gaitPeriodic: 0.3, minTravel: 0.3, crouchKnee: 45, standFloor: 0.9, freeformSecs: 1, crouchMaxSpeed: 1.6 };
+export const SEG = { contact: .1, air: .1, flightRise: 1.06, low: .8, plantDip: .9, riseBelow: .95, kneeLow: .25, rise: .35, drop: .35, slide: .6, footStill: .3, minLen: 6, minFlight: 4, gravity: 981, airSlack: 1.5, airMargin: 0.1, inPlaceRatio: 0.35, inPlaceFoot: 0.5, proneLow: 0.55, proneTilt: 55, handLow: 0.6, armActive: 0.5, straight: 0.5, gaitPeriodic: 0.3, minTravel: 0.3, crouchKnee: 45, standFloor: 0.9, freeformSecs: 1, crouchMaxSpeed: 1.6 };
 
 const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.max(0, Math.round(p / 100 * (s.length - 1))))]; };
 const median = a => pct(a, 50);
@@ -203,97 +197,4 @@ export function markInPlace(segs, sig) {
     const fs = med(foot);
     return fs > SEG.inPlaceFoot * sig.leg && med(pel) < SEG.inPlaceRatio * fs ? { ...seg, phase: 'in_place' } : seg;
   });
-}
-
-export const INTEGRITY_RULES = ['pop', 'crossing', 'freeze', 'ground_sink'];
-
-export const ENVELOPE_RULES = ['planted_foot_pitch_deg', 'planted_ankle_deg', 'heel_raise_pct', 'planted_toe_out_deg', 'knee_behind_line', 'knee_flex_range_deg', 'knee_flex_max_deg', 'min_stance_width', 'max_stance_width'];
-
-export const GAIT_RULES = ['envelope', 'bounce', 'stride_ratio'];
-
-export const SKIP_WHY = {
-  prone: { foot_slide: 'feet drag along the floor while prone or crawling', ground_float: 'feet lift off the floor while prone; the torso, knees and hands carry the contact' },
-  flight: { foot_slide: 'both feet airborne', plant_pop: 'both feet airborne', ground_float: 'airborne by design; judged by the ballistic airtime check instead' },
-  vault: { foot_slide: 'feet off the floor while the hands carry the body', plant_pop: 'feet off the floor while the hands carry the body', ground_float: 'feet off the floor while the hands carry the body' },
-  slide: { foot_slide: 'the whole body slides, so the low feet are not planted', plant_pop: 'the whole body slides, so the low feet are not planted' },
-};
-
-export const PHASE_RULES = {
-  locomotion: ['foot_slide', 'plant_pop', 'ground_float', 'bounce', 'stride_ratio'],
-  in_place: ['foot_slide', 'plant_pop', 'ground_float', 'bounce'],
-  flight: [],
-  plant: ['foot_slide', 'plant_pop', 'ground_float'],
-  vault: [],
-  slide: ['ground_float'],
-  kneel: ['foot_slide', 'plant_pop', 'ground_float'],
-  crouch: ['foot_slide', 'plant_pop', 'ground_float'],
-  prone: ['plant_pop'],
-  rise: ['foot_slide', 'plant_pop', 'ground_float'],
-  stand: ['foot_slide', 'plant_pop', 'ground_float'],
-  upper_body: ['foot_slide', 'plant_pop', 'ground_float'],
-  freeform: ['foot_slide', 'plant_pop', 'ground_float'],
-};
-
-export function phaseScope(phase, frames) {
-  const rules = phaseRules(phase, frames);
-  const judged = [...rules.filter(r => r !== 'envelope'), ...(rules.includes('envelope') ? ENVELOPE_RULES : []), ...INTEGRITY_RULES];
-  if (phase === 'flight') judged.push('ballistic_flight');
-  const skipped = [];
-  for (const r of ['foot_slide', 'plant_pop', 'ground_float']) if (!rules.includes(r)) skipped.push({ rule: r, why: SKIP_WHY[phase]?.[r] || `not applied in a ${phase} phase` });
-  for (const r of GAIT_RULES) if (!rules.includes(r)) {
-    const why = !GAIT_PHASES.includes(phase) ? `gait-envelope rule built from CMU walk and run; not meaningful in a ${phase} phase`
-      : r === 'envelope' ? `${phase} phase shorter than ${ENVELOPE_MIN_FRAMES} frames or without travel` : `${phase} has no travel to compare against`;
-    for (const x of r === 'envelope' ? ENVELOPE_RULES : [r]) skipped.push({ rule: x, why });
-  }
-  return { judged_with: judged, skipped, label: 'judged with: ' + judged.join(', '), skipped_label: skipped.length ? 'not checked: ' + skipped.map(x => x.rule).join(', ') : 'not checked: nothing' };
-}
-
-export const ENVELOPE_MIN_FRAMES = 30, WINDOW_MIN_FRAMES = 15, EDGE_SKIP_FRAMES = 60;
-
-export function phaseRules(phase, frames) {
-  const r = [...(PHASE_RULES[phase] || [])];
-  if (phase === 'locomotion' && frames >= ENVELOPE_MIN_FRAMES) r.push('envelope');
-  return r;
-}
-
-export const CONTACT_RULES = ['foot_slide', 'plant_pop'];
-
-export function phasePlan(phases, n, minWindow = WINDOW_MIN_FRAMES, pad = SEG.pad) {
-  return phases.map((p, i) => {
-    const frames = p.end - p.start + 1;
-    let from = p.start, to = p.end;
-    if (frames < minWindow) {
-      from = Math.max(0, p.start - Math.floor((minWindow - frames) / 2));
-      to = Math.min(n - 1, from + minWindow - 1);
-      from = Math.max(0, to - minWindow + 1);
-    }
-    const rules = phaseRules(p.phase, frames);
-    const contact = rules.filter(r => CONTACT_RULES.includes(r)), other = rules.filter(r => !CONTACT_RULES.includes(r));
-    const passes = [];
-    if (contact.length) {
-      const prev = phases[i - 1], next = phases[i + 1];
-      let cf = prev && prev.phase !== 'slide' ? Math.max(0, Math.min(from, p.start - pad)) : from;
-      let ct = next && next.phase !== 'slide' ? Math.min(n - 1, Math.max(to, p.end + pad)) : to;
-      if (n > EDGE_SKIP_FRAMES && ct - cf + 1 <= EDGE_SKIP_FRAMES) {
-        if (cf === 0) ct = Math.min(n - 1, EDGE_SKIP_FRAMES);
-        else if (ct === n - 1) cf = Math.max(0, n - 1 - EDGE_SKIP_FRAMES);
-      }
-      passes.push({ from: cf, to: ct, rules: contact });
-    }
-    if (other.length) passes.push({ from, to, rules: other });
-    return { phase: p.phase, start: p.start, end: p.end, from, to, rules, passes, ...phaseScope(p.phase, frames) };
-  });
-}
-
-export function phasedTasteInput(input, opts = {}) {
-  const phases = opts.phases || segmentPhases(input, opts);
-  return { ...input, phases: phasePlan(phases, input.B.length, opts.minWindow), integrity: { rules: INTEGRITY_RULES } };
-}
-
-export function groupByPhase(result) {
-  const s = summarize(result);
-  const groups = (result.phases || []).map((p, i) => ({ ...(p.judged_with ? {} : phaseScope(p.phase, p.end - p.start + 1)), ...p, index: i, findings: [] }));
-  const whole = { phase: 'whole take', index: -1, start: null, end: null, findings: [] };
-  for (const f of s.findings) (groups[f.phase_index] || whole).findings.push(f);
-  return { summary: s, groups: whole.findings.length ? [whole, ...groups] : groups };
 }

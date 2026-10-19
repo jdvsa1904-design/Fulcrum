@@ -4,7 +4,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DEFAULTS = {
-    "taste": r"C:\Projects\LocomotionTaste",
     "samples": r"C:\Projects\Checkpoint\SourceAssets\Cascadeur",
     "blender": r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe",
     "exports": "{root}/exports",
@@ -73,7 +72,6 @@ def blender(cfg):
 def load():
     cfg = raw()
     return {
-        "taste": expand(cfg.get("taste")),
         "samples": expand(cfg.get("samples")),
         "blender": blender(cfg),
         "exports": expand(cfg.get("exports")) or ROOT / "exports",

@@ -37,7 +37,7 @@ Fulcrum (C:\Projects\Fulcrum) replaces Cascadeur. It fixes the FRT drill capture
   - app.js and studio.html are the UI and the pipeline.
   - ballistic.js and fulcrum.js hold the Cascadeur-derived physics.
   - filters.js, ik.js, contacts.js, stitch.js and hik.js are the ported solvers.
-  - tastebridge.js connects Fulcrum to LocomotionTaste.
+  - phases.js splits a take into movement phases (stand, walk or run, running on the spot, flight, kneel and so on). It used to be tastebridge.js.
   - tools/frames_to_fbx.py is the Blender 5.2 FBX writer.
 - Current export: exports/FRT_fulcrum_v6.fbx (round-trip 0.00 cm, 356 frames, 123 joints). Project file: exports/FRT_fulcrum_v6.fulcrum.json.
   - Exported with "export anyway" unticked: taste PASS with no findings, gate PASS (worst untouched joint 6.0 deg, pelvis moved 0.2 cm).
@@ -64,25 +64,23 @@ Fulcrum (C:\Projects\Fulcrum) replaces Cascadeur. It fixes the FRT drill capture
   - **Verified:** all joints relative to the pelvis match the source shots to 0.000 cm, and bone directions to within 0.001 deg, in all three shots.
 - Edit layer checked by script: a 17.2 deg key blends with the 12-frame falloff, edited joints leave the gate, and clearing restores the take.
 
-## Locomotion taste (C:\Projects\LocomotionTaste, CMU-only)
-- **Where it runs:** the "Locomotion taste" panel. It runs 1.5 s after every edit.
-- **What it writes:**
-  - /api/taste-last and exports/taste_last.json: the latest result, for other Claude sessions.
-  - exports/taste_ledger.jsonl: one line per run.
-- **Export gate:** blockers stop the FBX export unless "export anyway" is ticked.
-- **Phases:** tastebridge.segmentPhases splits the take into stand, locomotion, in_place, flight, plant, slide, kneel, rise, and each phase is judged with only its own rules.
-  - **flight** only counts if its airtime fits the pelvis rise, so floating feet cannot hide as a jump.
-  - **in_place** is locomotion where the pelvis moves at under 0.35x the swing-foot speed: running on the spot.
-    - It gets the physical rules only (foot_slide, plant_pop, ground_float, bounce) and no CMU gait envelope.
-    - The envelope models overground gait, where a forefoot landing at low speed really is tiptoeing.
-    - Running on the spot lands on the forefoot by nature.
-    - The FRT sprint (f51-145) moves the pelvis at 0.37 leg lengths/s while the feet move at 2.14.
-- **LocomotionTaste blind spot:** foot_slide needs both ball and ankle low, so forefoot skating is not caught. It was reported to the taste agent, and Fulcrum's ground-feet fix pins the ball itself.
-- **Findings on the corrected take (v4):**
-  - **Shot1/shot2 seam pop at f100 (left foot):** in the source. The existing smoothing fix over f95-105 removes it.
-  - **Floating feet, 21 cm at f69-77 (sprint) and 17 cm at f285-293:** in the source.
-  - **Toe-down pitch and raised heels in the sprint:** the sprint was captured nearly in place (pelvis travels about 70 cm), so the CMU envelope judges it at walking speed.
-- **No longer reported:** the old f259 shin crossing, f263 pop and f56-60 foot slide. They were import artifacts.
+## LocomotionTaste removed (2026-10-19)
+- **What happened:** LocomotionTaste (the separate program at C:\Projects\LocomotionTaste that scored locomotion against CMU data) was deleted, so Fulcrum no longer uses it.
+- **Removed with it:**
+  - The "Locomotion taste" panel, its "judge after every edit" run, and the toolbar button.
+  - The server routes /api/taste, /api/taste-status and /api/taste-last, the `--taste-phases` command, and the files exports/taste_last.json and exports/taste_ledger.jsonl. The "taste" setting in fulcrum.json is ignored.
+  - The locomotion check before FBX export, and the MCP `judge` tool.
+- **Kept:**
+  - **Phases (phases.js):** segmentPhases splits the take into stand, locomotion, in_place, flight, vault, plant, slide, kneel, crouch, prone, rise, upper_body and freeform. It is Fulcrum's own code and is kept for the coming one-click fix; nothing in the studio calls it yet. phaseInput turns the studio's joint matrices into the 22-joint, Z-up, centimetre layout it reads.
+    - **flight** only counts if its airtime fits the pelvis rise, so floating feet cannot hide as a jump.
+    - **in_place** is locomotion where the pelvis moves at under 0.35x the swing-foot speed: running on the spot. The FRT sprint (f51-145) moves the pelvis at 0.37 leg lengths/s while the feet move at 2.14.
+  - **Auto Fix** (Review workspace, MCP `auto_fix`): the same loop, now judged by Fulcrum's own checks instead of LocomotionTaste.
+    - The physics flags are blockers: planted foot sliding becomes foot_slide, airborne but not falling becomes ground_float, pose snaps become pop.
+    - Motion quality: a foot below the floor becomes ground_sink (a warning). Failed foot locks or hand pins, stretched bones and invalid numbers are blockers.
+    - Sliding foot plants (from wire/plants.js) become foot_slide warnings.
+    - The whole run is one undo step; the trial rebuilds no longer fill the undo history.
+  - **Export gate:** the motion-quality check still stops the FBX export when foot locks or hand pins fail or transforms are broken. "export anyway" now sits in the Export section.
+- **Older notes below** quote "taste" results (PASS, WARN, blockers). Those came from LocomotionTaste when it was still installed.
 
 ## Reverse-engineering reports (C:\Projects\Fulcrum\re)
 Every claim is labelled OBSERVED, MEASURED, INFERRED or UNKNOWN, and every report ends with a "port to Fulcrum" list.
@@ -177,7 +175,7 @@ e_work\max	ests\csmsweep.ms).
 ## Fulcrum MCP (2026-10-16)
 - **Server:** mcp/fulcrum_mcp.py, registered at user scope as `fulcrum`. It goes through server.py /api/bridge to the open page; app.js polls /api/bridge/next.
 - **Needs:** `python server.py 8790` running and http://localhost:8790/studio.html open in a browser.
-- **Tools:** status, load_frt, open_project, save_project, add_fix, set_fixes, remove_fix, cut, insert, set_locks, set_pins, set_layer, select, judge, pose, screenshot (side, front, back, top, three_quarter, relative to the character's facing), export_fbx, eval_js.
+- **Tools:** status, load_frt, open_project, save_project, add_fix, set_fixes, remove_fix, cut, insert, set_locks, set_pins, set_layer, select, auto_fix, pose, screenshot (side, front, back, top, three_quarter, relative to the character's facing), export_fbx, eval_js.
 
 ## Tools and work dirs
 - Ghidra 12.1.2:

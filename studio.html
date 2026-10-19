@@ -34,7 +34,7 @@
     <div class="shelf-group"><span class="shelf-label">PROJECT</span><button type="button" data-action="loadFRT" title="Load FRT drill" aria-label="Load FRT drill">↧</button><button type="button" data-action="editUndo" title="Undo" aria-label="Undo">↶</button><button type="button" data-action="editRedo" title="Redo" aria-label="Redo">↷</button></div>
     <div class="shelf-group"><span class="shelf-label">ANIMATE</span><button type="button" data-action="rigKeyFk" title="Key selected control" aria-label="Key selected control">◆</button><button type="button" data-action="assistPose" title="Suggest pose" aria-label="Suggest pose">✦</button><button type="button" data-action="geToggle" title="Toggle graph editor" aria-label="Toggle graph editor">⌁</button></div>
     <div class="shelf-group"><span class="shelf-label">CONTACTS</span><button type="button" data-action="lockL" title="Lock left foot" aria-label="Lock left foot">L</button><button type="button" data-action="lockR" title="Lock right foot" aria-label="Lock right foot">R</button><button type="button" data-action="pinHand" title="Pin left hand to grip" aria-label="Pin left hand to grip">⌖</button></div>
-    <div class="shelf-group"><span class="shelf-label">OUTPUT</span><button type="button" data-action="runTaste" title="Judge locomotion" aria-label="Judge locomotion">✓</button><button type="button" data-action="saveProj" title="Save project" aria-label="Save project">▣</button></div>
+    <div class="shelf-group"><span class="shelf-label">OUTPUT</span><button type="button" data-action="saveProj" title="Save project" aria-label="Save project">▣</button></div>
   </div>
   <main class="main">
     <nav class="tool-rail" aria-label="Tool rail">
@@ -125,17 +125,16 @@
         <div id="gate" aria-live="polite"></div>
       </section>
       <section data-workspaces="review">
-        <h2>Locomotion taste</h2>
-        <p class="note">Splits the take into drill phases (locomotion, flight, plant, slide, kneel, rise, stand) and judges each against real human data with only the rules that make sense for it: gait envelope on locomotion of 30+ frames, no ground-float in flight, no foot-slide in the slide. Pop, shin crossing, freeze and ground sink run on the whole take. Blockers stop the FBX export unless you tick export anyway.</p>
-        <div class="row"><button id="runTaste" class="primary">Judge locomotion</button><label><input type="checkbox" id="tasteAuto" checked> judge after every edit</label><label><input type="checkbox" id="tasteOverride"> export anyway</label></div>
-        <div class="row"><button id="autoFix">Auto Fix</button><span class="note">Judges, plans a fix per blocker, keeps each only if the blocker count drops.</span></div>
+        <h2>Auto Fix</h2>
+        <p class="note">Checks the take with Fulcrum's own checks: the physics flags (foot slide, float, pose snaps), feet below the floor, failed foot locks and hand pins, and sliding foot plants. It plans a fix per problem and keeps each one only if the problem count drops. One undo reverts the whole run.</p>
+        <div class="row"><button id="autoFix" class="primary">Auto Fix</button></div>
         <pre class="log" id="autoFixLog" aria-live="polite"></pre>
-        <div id="taste" aria-live="polite"></div>
       </section>
       <section data-workspaces="export">
         <h2>Export</h2>
         <div class="row"><input id="outName" value="FRT_fulcrum" aria-label="Export name"></div>
         <div class="row"><button id="exportFbx" class="primary">Export FBX for Unreal</button><button id="exportGlb">Save GLB</button><button id="saveProj">Save project</button><label class="file">Open project…<input type="file" id="projIn" accept=".json"></label></div>
+        <div class="row"><label><input type="checkbox" id="exportAnyway"> export anyway</label><span class="note">Failed foot locks, failed hand pins or broken transforms stop the FBX export unless this is ticked.</span></div>
         <pre class="log" id="exportLog" aria-live="polite"></pre>
       </section>
     </aside>
